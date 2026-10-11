@@ -751,9 +751,8 @@ func TestProxyHandleMySQLHandshakeFailClosedOnMalformedPayload(t *testing.T) {
 		_ = mysqlwire.WritePacket(conn, fakeHandshake, 0)
 	}()
 
-	backendHost, backendPortStr, _ := net.SplitHostPort(backendListener.Addr().String())
-	var backendPort int
-	fmt.Sscanf(backendPortStr, "%d", &backendPort)
+	backendHost, _, _ := net.SplitHostPort(backendListener.Addr().String())
+	backendPort := backendListener.Addr().(*net.TCPAddr).Port
 
 	// 2. Start Proxy with MySQL driver
 	cfg := config.DefaultConfig()

@@ -146,13 +146,6 @@ func (p *RiskPolicy) MatchesAlwaysCriticalForEngine(sql, engine string) (bool, s
 	return false, ""
 }
 
-// sqlForPolicyMatching removes comments, quoted values, and quoted identifiers
-// before applying policy phrases, so examples and data literals cannot trigger
-// destructive-operation overrides.
-func sqlForPolicyMatching(sql string) string {
-	return sqlForPolicyMatchingForEngine(sql, "postgres")
-}
-
 func sqlForPolicyMatchingForEngine(sql string, engine string) string {
 	isMySQL := strings.EqualFold(engine, "mysql") || strings.EqualFold(engine, "mariadb")
 	isPostgres := strings.EqualFold(engine, "postgres") || strings.EqualFold(engine, "postgresql") || engine == ""

@@ -158,11 +158,9 @@ func (d *MongoDBDriver) CreateBranch(ctx context.Context, sourceBranch, targetBr
 					if name == "_id_" {
 						continue
 					}
-					var keyDoc bson.M
-					if m, ok := doc["key"].(bson.M); ok {
-						keyDoc = m
-					} else if dKey, okD := doc["key"].(bson.D); okD {
-						keyDoc = dKey.Map()
+					keyDoc, ok := doc["key"]
+					if !ok || keyDoc == nil {
+						continue
 					}
 					opts := options.Index().SetName(name)
 					if unique, ok := doc["unique"].(bool); ok {
