@@ -314,7 +314,7 @@ func (s *Server) acceptLoop(ctx context.Context) {
 	}
 }
 
-func (s *Server) ensureBranchExists(targetBranch, defaultBranch string) error {
+func (s *Server) ensureBranchExists(targetBranch, defaultBranch string, optCtx ...context.Context) error {
 	if s.drv == nil {
 		return nil
 	}
@@ -323,7 +323,11 @@ func (s *Server) ensureBranchExists(targetBranch, defaultBranch string) error {
 		defer unlock()
 	}
 
-	provCtx, provCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	parentCtx := context.Background()
+	if len(optCtx) > 0 && optCtx[0] != nil {
+		parentCtx = optCtx[0]
+	}
+	provCtx, provCancel := context.WithTimeout(parentCtx, 5*time.Second)
 	defer provCancel()
 	exists, err := s.drv.BranchExists(provCtx, targetBranch)
 	if err != nil {
@@ -339,6 +343,14 @@ func (s *Server) ensureBranchExists(targetBranch, defaultBranch string) error {
 	}
 	log.Printf("[BranchBase Proxy] ✅ JIT provisioned database for branch %q", targetBranch)
 	return nil
+}
+
+func (s *Server) sendEarlyError(conn net.Conn, pgCode string, mysqlCode uint16, mysqlState, msg string) {
+	if s.cfg != nil && (s.cfg.Driver == "mysql" || s.cfg.Driver == "mariadb") {
+		_, _ = conn.Write(mysqlwire.BuildErrorPacket(mysqlCode, mysqlState, msg, 1))
+		return
+	}
+	_, _ = conn.Write(pgwire.BuildErrorResponse("FATAL", pgCode, msg))
 }
 
 func (s *Server) dialBackend() (net.Conn, string, error) {
@@ -384,19 +396,22 @@ func (s *Server) handleConnection(clientConn net.Conn) {
 	if activeBranch != "" {
 		if err := s.validateBranchIdentity(activeBranch); err != nil {
 			log.Printf("[BranchBase Proxy] ❌ Branch database identity is ambiguous: %v", err)
-			_, _ = clientConn.Write(pgwire.BuildErrorResponse("FATAL", "3D000", err.Error()))
+			s.sendEarlyError(clientConn, "3D000", 1049, "42000", err.Error())
 			return
 		}
 	}
 	sanitizedBranch := git.SanitizeBranchName(activeBranch)
 	targetDB := s.cfg.DatabaseNameForBranch(sanitizedBranch)
 
+	connCtx, connCancel := context.WithTimeout(context.Background(), startupTimeout)
+	defer connCancel()
+
 	// 1b. JIT branch provisioning
 	if s.drv != nil && sanitizedBranch != git.SanitizeBranchName(defaultBranch) {
-		if err := s.ensureBranchExists(sanitizedBranch, defaultBranch); err != nil {
+		if err := s.ensureBranchExists(sanitizedBranch, defaultBranch, connCtx); err != nil {
 			log.Printf("[BranchBase Proxy] ❌ JIT branch provisioning failed for %q: %v", sanitizedBranch, err)
 			errMsg := fmt.Sprintf("BranchBase: failed to provision database for branch %q: %v", sanitizedBranch, err)
-			_, _ = clientConn.Write(pgwire.BuildErrorResponse("FATAL", "3D000", errMsg))
+			s.sendEarlyError(clientConn, "3D000", 1049, "42000", errMsg)
 			return
 		}
 	}
@@ -408,7 +423,7 @@ func (s *Server) handleConnection(clientConn net.Conn) {
 	if err != nil {
 		log.Printf("[BranchBase Proxy] ❌ Failed to connect to backend %s: %v", backendAddr, err)
 		errMsg := fmt.Sprintf("BranchBase: failed to connect to database backend %s: %v", backendAddr, err)
-		_, _ = clientConn.Write(pgwire.BuildErrorResponse("FATAL", "08006", errMsg))
+		s.sendEarlyError(clientConn, "08006", 2002, "HY000", errMsg)
 		return
 	}
 	s.addActiveConn(backendConn)
@@ -434,23 +449,20 @@ func (s *Server) handleConnection(clientConn net.Conn) {
 		}
 
 		// Check if client requested SSL
-		if mysqlwire.IsSSLRequest(clientPayload) && len(clientPayload) == 32 {
-			if err := mysqlwire.WritePacket(backendConn, clientPayload, clientSeqID); err != nil {
-				log.Printf("[BranchBase Proxy] Error forwarding MySQL SSL request to backend: %v", err)
-				return
-			}
-			clientPayload, clientSeqID, err = mysqlwire.ReadPacket(clientConn)
-			if err != nil {
-				log.Printf("[BranchBase Proxy] Error reading client HandshakeResponse after SSL: %v", err)
-				return
-			}
+		if mysqlwire.IsSSLRequest(clientPayload) {
+			log.Printf("[BranchBase Proxy] ❌ MySQL SSLRequest is not supported through cleartext proxy. Terminating.")
+			errPkt := mysqlwire.BuildErrorPacket(2061, "HY000", "BranchBase: MySQL TLS/SSL negotiation is not supported on transparent proxy; please set sslmode=disable or use unencrypted local connection", clientSeqID+1)
+			_, _ = clientConn.Write(errPkt)
+			return
 		}
 
 		// Rewrite database to targetDB
 		rewritten, err := mysqlwire.RewriteHandshakeResponseDatabase(clientPayload, targetDB)
 		if err != nil {
-			log.Printf("[BranchBase Proxy] Failed to rewrite MySQL HandshakeResponse database to %q: %v", targetDB, err)
-			rewritten = clientPayload
+			log.Printf("[BranchBase Proxy] ❌ Failed to rewrite MySQL HandshakeResponse database to %q: %v. Aborting connection.", targetDB, err)
+			errPkt := mysqlwire.BuildErrorPacket(1049, "42000", fmt.Sprintf("BranchBase: failed to route database to %q: %v", targetDB, err), clientSeqID+1)
+			_, _ = clientConn.Write(errPkt)
+			return // Strict fail-closed
 		}
 
 		if err := mysqlwire.WritePacket(backendConn, rewritten, clientSeqID); err != nil {

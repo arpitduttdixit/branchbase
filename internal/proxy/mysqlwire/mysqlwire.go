@@ -34,8 +34,11 @@ const (
 	ClientPluginAuthLenencClientData uint32 = 0x00200000
 )
 
+const MaxHandshakePacketSize = 1024 * 1024 // 1 MB safety limit for handshake packets
+
 var (
 	ErrPacketTooShort = errors.New("mysqlwire: packet length is too short")
+	ErrPacketTooLarge = errors.New("mysqlwire: packet length exceeds safety limit")
 	ErrInvalidPacket  = errors.New("mysqlwire: malformed packet")
 	ErrProtocol320    = errors.New("mysqlwire: legacy Protocol 3.20 not supported")
 )
@@ -49,6 +52,10 @@ func ReadPacket(r io.Reader) ([]byte, byte, error) {
 
 	payloadLen := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
 	seqID := header[3]
+
+	if payloadLen > MaxHandshakePacketSize {
+		return nil, seqID, fmt.Errorf("%w: %d bytes (max %d)", ErrPacketTooLarge, payloadLen, MaxHandshakePacketSize)
+	}
 
 	payload := make([]byte, payloadLen)
 	if _, err := io.ReadFull(r, payload); err != nil {
@@ -208,4 +215,33 @@ func RewriteHandshakeResponseDatabase(payload []byte, targetDB string) ([]byte, 
 	buf.WriteByte(0)
 	buf.Write(payload[idx:])
 	return buf.Bytes(), nil
+}
+
+// BuildErrorPacket constructs a MySQL wire protocol ERR packet with full 4-byte header.
+// errCode is the MySQL 16-bit numeric error code (e.g. 1049 for ER_BAD_DB_ERROR, 2002 for CR_CONNECTION_ERROR).
+// sqlState is the 5-character SQLSTATE code (e.g. "42000" or "HY000").
+func BuildErrorPacket(errCode uint16, sqlState, message string, seqID byte) []byte {
+	if sqlState == "" || len(sqlState) != 5 {
+		sqlState = "HY000"
+	}
+
+	var payload bytes.Buffer
+	payload.WriteByte(0xFF) // ERR packet indicator
+	var codeBytes [2]byte
+	binary.LittleEndian.PutUint16(codeBytes[:], errCode)
+	payload.Write(codeBytes[:])
+	payload.WriteByte('#') // SQLSTATE marker
+	payload.WriteString(sqlState)
+	payload.WriteString(message)
+
+	pBytes := payload.Bytes()
+	pLen := len(pBytes)
+	header := [4]byte{
+		byte(pLen),
+		byte(pLen >> 8),
+		byte(pLen >> 16),
+		seqID,
+	}
+
+	return append(header[:], pBytes...)
 }

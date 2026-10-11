@@ -15,6 +15,7 @@ import (
 
 	"github.com/branchbase/branchbase/internal/config"
 	"github.com/branchbase/branchbase/internal/driver"
+	"github.com/branchbase/branchbase/internal/proxy/mysqlwire"
 )
 
 type mockDriver struct {
@@ -727,6 +728,76 @@ func TestProxyHandleMySQLHandshakeInterception(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("backend timed out waiting for rewritten MySQL HandshakeResponse41")
+	}
+}
+
+func TestProxyHandleMySQLHandshakeFailClosedOnMalformedPayload(t *testing.T) {
+	// 1. Mock MySQL Backend Server
+	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start mock backend: %v", err)
+	}
+	defer func() { _ = backendListener.Close() }()
+
+	go func() {
+		conn, err := backendListener.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		// Send initial handshake
+		fakeHandshake := []byte{10, 0, 0, 0, 10, '8', '.', '0', 0, 1, 0, 0, 0}
+		_ = mysqlwire.WritePacket(conn, fakeHandshake, 0)
+	}()
+
+	backendHost, backendPortStr, _ := net.SplitHostPort(backendListener.Addr().String())
+	var backendPort int
+	fmt.Sscanf(backendPortStr, "%d", &backendPort)
+
+	// 2. Start Proxy with MySQL driver
+	cfg := config.DefaultConfig()
+	cfg.Driver = "mysql"
+	cfg.Connection.Host = backendHost
+	cfg.Connection.Port = backendPort
+	cfg.Connection.BaseDatabase = "myapp_dev"
+
+	srv := NewServer(&cfg, t.TempDir(), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := srv.Start(ctx); err != nil {
+		t.Fatalf("Server.Start failed: %v", err)
+	}
+	defer func() { _ = srv.Stop() }()
+
+	proxyAddr := listenerAddr(srv)
+	clientConn, err := net.DialTimeout("tcp", proxyAddr, 2*time.Second)
+	if err != nil {
+		t.Fatalf("failed to dial proxy: %v", err)
+	}
+	defer func() { _ = clientConn.Close() }()
+
+	// Read initial handshake packet from proxy
+	_, _, err = mysqlwire.ReadPacket(clientConn)
+	if err != nil {
+		t.Fatalf("failed to read initial handshake: %v", err)
+	}
+
+	// Send completely malformed HandshakeResponse packet (< 32 bytes)
+	malformedPayload := []byte{0x01, 0x02, 0x03}
+	if err := mysqlwire.WritePacket(clientConn, malformedPayload, 1); err != nil {
+		t.Fatalf("failed to write malformed packet: %v", err)
+	}
+
+	// The proxy MUST respond with an ERR packet (fail-closed) and close connection
+	errPkt, _, err := mysqlwire.ReadPacket(clientConn)
+	if err != nil {
+		// Connection closed immediately is also fail-closed acceptable
+		return
+	}
+	if len(errPkt) > 0 && errPkt[0] != 0xFF {
+		t.Fatalf("expected MySQL ERR packet (0xFF), got: 0x%X", errPkt[0])
 	}
 }
 
