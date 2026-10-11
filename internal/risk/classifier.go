@@ -9,9 +9,10 @@ type ClassificationInput struct {
 	File          string          `json:"file"`
 	SQL           string          `json:"sql"`
 	Engine        string          `json:"engine"`
-	TableContext  string          `json:"table_context"`
-	TableMetadata *TableMetadata  `json:"table_metadata,omitempty"`
-	Operations    []DDLOperation  `json:"operations"`
+	TableContext   string                    `json:"table_context"`
+	TableMetadata  *TableMetadata            `json:"table_metadata,omitempty"`
+	TablesMetadata map[string]*TableMetadata `json:"tables_metadata,omitempty"`
+	Operations     []DDLOperation            `json:"operations"`
 }
 
 // RiskClassifier provides an abstraction for evaluating migration danger profiles.

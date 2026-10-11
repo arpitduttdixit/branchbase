@@ -88,8 +88,12 @@ func (h *HeuristicClassifier) Classify(ctx context.Context, input Classification
 
 			// Check foreign key dependencies
 			isFKReferenced := false
-			if input.TableMetadata != nil {
-				for _, fk := range input.TableMetadata.InboundFKs {
+			targetMeta := input.TableMetadata
+			if input.TablesMetadata != nil && input.TablesMetadata[op.TargetTable] != nil {
+				targetMeta = input.TablesMetadata[op.TargetTable]
+			}
+			if targetMeta != nil {
+				for _, fk := range targetMeta.InboundFKs {
 					if strings.EqualFold(fk.ToColumn, colName) || colName == "" {
 						isFKReferenced = true
 						touchesFKs = true
@@ -106,7 +110,7 @@ func (h *HeuristicClassifier) Classify(ctx context.Context, input Classification
 			} else {
 				level = maxLevel(level, RiskHigh)
 				flags = append(flags, fmt.Sprintf("DROP COLUMN %s.%s", op.TargetTable, colName))
-				if input.TableMetadata == nil || len(input.TableMetadata.Columns) == 0 {
+				if targetMeta == nil || len(targetMeta.Columns) == 0 {
 					flags = append(flags, "FK impact unknown: catalog metadata unavailable")
 					details = append(details, "The database catalog could not confirm whether foreign keys reference this column.")
 				}
@@ -215,9 +219,13 @@ func (h *HeuristicClassifier) Classify(ctx context.Context, input Classification
 	}
 
 	// Check if any inbound foreign key was touched across all operations
-	if input.TableMetadata != nil && len(input.TableMetadata.InboundFKs) > 0 {
-		for _, op := range input.Operations {
-			if op.Type == "DROP_TABLE" {
+	for _, op := range input.Operations {
+		if op.Type == "DROP_TABLE" {
+			targetMeta := input.TableMetadata
+			if input.TablesMetadata != nil && input.TablesMetadata[op.TargetTable] != nil {
+				targetMeta = input.TablesMetadata[op.TargetTable]
+			}
+			if targetMeta != nil && len(targetMeta.InboundFKs) > 0 {
 				touchesFKs = true
 				level = maxLevel(level, RiskCritical)
 				break

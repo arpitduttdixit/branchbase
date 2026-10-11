@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -111,22 +112,30 @@ func (a *RiskAnalyzer) AnalyzeSQL(ctx context.Context, fileName, sqlContent stri
 		return nil, fmt.Errorf("failed to parse DDL: %w", err)
 	}
 
-	// 3. Introspect first affected table if available
-	var targetTable string
+	// 3. Introspect all affected tables if available
+	tablesMeta := make(map[string]*TableMetadata)
+	var firstMeta *TableMetadata
+	var schemaSignatures []string
+
 	for _, op := range ops {
 		if op.TargetTable != "" {
-			targetTable = op.TargetTable
-			break
+			tbl := op.TargetTable
+			if _, exists := tablesMeta[tbl]; !exists && a.introspector != nil {
+				if meta, err := a.introspector.IntrospectTable(ctx, tbl); err == nil && meta != nil {
+					tablesMeta[tbl] = meta
+					if firstMeta == nil {
+						firstMeta = meta
+					}
+					schemaSignatures = append(schemaSignatures, FormatSchemaSignature(meta))
+				}
+			}
 		}
 	}
 
-	var tableMeta *TableMetadata
 	schemaSignature := "no_schema"
-	if targetTable != "" && a.introspector != nil {
-		if meta, err := a.introspector.IntrospectTable(ctx, targetTable); err == nil && meta != nil {
-			tableMeta = meta
-			schemaSignature = FormatSchemaSignature(meta)
-		}
+	if len(schemaSignatures) > 0 {
+		sort.Strings(schemaSignatures)
+		schemaSignature = strings.Join(schemaSignatures, ";")
 	}
 
 	// 4. Check cache
@@ -138,36 +147,72 @@ func (a *RiskAnalyzer) AnalyzeSQL(ctx context.Context, fileName, sqlContent stri
 	}
 
 	// 5. Check always_critical rule override
-	isCritical, critPattern := a.policy.MatchesAlwaysCritical(sqlContent)
+	isCritical, critPattern := a.policy.MatchesAlwaysCriticalForEngine(sqlContent, a.opts.Engine)
 
 	// 6. Execute classification
-	tableCtx := FormatPromptContext(tableMeta)
+	tableCtx := FormatPromptContext(firstMeta)
+	if len(tablesMeta) > 1 {
+		var contexts []string
+		for _, meta := range tablesMeta {
+			contexts = append(contexts, FormatPromptContext(meta))
+		}
+		tableCtx = strings.Join(contexts, "\n")
+	}
+
 	input := ClassificationInput{
-		File:          fileName,
-		SQL:           sqlContent,
-		Engine:        a.opts.Engine,
-		TableContext:  tableCtx,
-		TableMetadata: tableMeta,
-		Operations:    ops,
+		File:           fileName,
+		SQL:            sqlContent,
+		Engine:         a.opts.Engine,
+		TableContext:   tableCtx,
+		TableMetadata:  firstMeta,
+		TablesMetadata: tablesMeta,
+		Operations:     ops,
 	}
 
 	riskResult, err := a.classifier.Classify(ctx, input)
 	if err != nil {
 		// Fallback to heuristic if primary classifier failed
 		if a.classifier.Name() != "heuristic" {
+			if strings.EqualFold(a.policy.OnJevUnavailable, string(ActionBlock)) {
+				return &MigrationRisk{
+					File:        fileName,
+					Level:       RiskCritical,
+					Reversible:  false,
+					Destructive: true,
+					Category:    CategorySchemaChange,
+					Confidence:  0.0,
+					Flags:       []string{"JEV_UNAVAILABLE", "BLOCKED_BY_POLICY"},
+					Details:     fmt.Sprintf("Primary classifier %q failed (%v) and policy on_jev_unavailable is set to block", a.classifier.Name(), err),
+					AnalyzedAt:  time.Now(),
+					Engine:      a.opts.Engine,
+					Source:      a.classifier.Name(),
+				}, nil
+			}
 			fallback := NewHeuristicClassifier()
 			riskResult, err = fallback.Classify(ctx, input)
+			if riskResult != nil {
+				riskResult.Flags = append(riskResult.Flags, "JEV_FALLBACK_HEURISTIC")
+			}
 		}
 		if err != nil {
 			return nil, fmt.Errorf("classification failed: %w", err)
 		}
 	}
-	if tableMeta == nil {
-		for _, op := range ops {
-			if op.Type == "DROP_COLUMN" {
+	for _, op := range ops {
+		if op.Type == "DROP_COLUMN" {
+			meta := tablesMeta[op.TargetTable]
+			if meta == nil || len(meta.Columns) == 0 {
 				riskResult.Level = maxLevel(riskResult.Level, RiskHigh)
-				riskResult.Flags = append(riskResult.Flags, "FK impact unknown: catalog metadata unavailable")
-				break
+				hasFKFlag := false
+				for _, f := range riskResult.Flags {
+					if strings.Contains(f, "FK impact unknown") {
+						hasFKFlag = true
+						break
+					}
+				}
+				if !hasFKFlag {
+					riskResult.Flags = append(riskResult.Flags, "FK impact unknown: catalog metadata unavailable")
+				}
 			}
 		}
 	}

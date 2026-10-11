@@ -19,6 +19,29 @@ func TestStripCommentsAndTransactions(t *testing.T) {
 	}
 }
 
+func TestStripCommentsAndTransactionsDialects(t *testing.T) {
+	// 1. MySQL: Block comments do not nest. The first */ ends the comment.
+	mysqlSQL := "/* /* */ DROP TABLE users; -- */"
+	mysqlCleaned := StripCommentsAndTransactionsForEngine(mysqlSQL, "mysql")
+	if mysqlCleaned != "DROP TABLE users;" {
+		t.Errorf("expected MySQL non-nested comment to yield 'DROP TABLE users;', got %q", mysqlCleaned)
+	}
+
+	// 2. MySQL: Executable comments /*! ... */ should retain the SQL statement
+	mysqlExecSQL := "/*!50000 DROP TABLE users */;"
+	mysqlExecCleaned := StripCommentsAndTransactionsForEngine(mysqlExecSQL, "mysql")
+	if mysqlExecCleaned != "DROP TABLE users ;" {
+		t.Errorf("expected MySQL executable comment to retain statement, got %q", mysqlExecCleaned)
+	}
+
+	// 3. PostgreSQL: Block comments DO nest
+	pgSQL := "/* outer /* inner */ still outer */ DROP TABLE users;"
+	pgCleaned := StripCommentsAndTransactionsForEngine(pgSQL, "postgres")
+	if pgCleaned != "DROP TABLE users;" {
+		t.Errorf("expected Postgres nested comment to yield 'DROP TABLE users;', got %q", pgCleaned)
+	}
+}
+
 func TestSplitStatements(t *testing.T) {
 	sql := `
 		BEGIN;

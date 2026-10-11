@@ -130,11 +130,16 @@ func (p *RiskPolicy) IsPathExcluded(filePath string) bool {
 	return false
 }
 
-// MatchesAlwaysCritical checks executable SQL tokens for configured critical patterns.
+// MatchesAlwaysCritical checks executable SQL tokens for configured critical patterns using Postgres dialect.
 func (p *RiskPolicy) MatchesAlwaysCritical(sql string) (bool, string) {
-	upperSQL := strings.ToUpper(sqlForPolicyMatching(sql))
+	return p.MatchesAlwaysCriticalForEngine(sql, "postgres")
+}
+
+// MatchesAlwaysCriticalForEngine checks executable SQL tokens for configured critical patterns for a specific engine.
+func (p *RiskPolicy) MatchesAlwaysCriticalForEngine(sql, engine string) (bool, string) {
+	upperSQL := strings.ToUpper(sqlForPolicyMatchingForEngine(sql, engine))
 	for _, pattern := range p.AlwaysCritical {
-	if normalized := strings.ToUpper(sqlForPolicyMatching(pattern)); normalized != "" && strings.Contains(upperSQL, normalized) {
+		if normalized := strings.ToUpper(sqlForPolicyMatchingForEngine(pattern, engine)); normalized != "" && strings.Contains(upperSQL, normalized) {
 			return true, pattern
 		}
 	}
@@ -145,6 +150,13 @@ func (p *RiskPolicy) MatchesAlwaysCritical(sql string) (bool, string) {
 // before applying policy phrases, so examples and data literals cannot trigger
 // destructive-operation overrides.
 func sqlForPolicyMatching(sql string) string {
+	return sqlForPolicyMatchingForEngine(sql, "postgres")
+}
+
+func sqlForPolicyMatchingForEngine(sql string, engine string) string {
+	isMySQL := strings.EqualFold(engine, "mysql") || strings.EqualFold(engine, "mariadb")
+	isPostgres := strings.EqualFold(engine, "postgres") || strings.EqualFold(engine, "postgresql") || engine == ""
+
 	var out strings.Builder
 	writeSpace := func() {
 		if out.Len() > 0 {
@@ -157,25 +169,75 @@ func sqlForPolicyMatching(sql string) string {
 
 	for i := 0; i < len(sql); {
 		switch {
-		case sql[i] == '#' || i+1 < len(sql) && sql[i:i+2] == "--":
-			if sql[i] == '#' { i++ } else { i += 2 }
-			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' { i++ }
-			writeSpace()
-		case i+1 < len(sql) && sql[i:i+2] == "/*":
-			depth := 1
-			i += 2
-			for i < len(sql) && depth > 0 {
-				if i+1 < len(sql) && sql[i:i+2] == "/*" { depth++; i += 2; continue }
-				if i+1 < len(sql) && sql[i:i+2] == "*/" { depth--; i += 2; continue }
+		case sql[i] == '#' || (i+1 < len(sql) && sql[i:i+2] == "--"):
+			if sql[i] == '#' {
+				i++
+			} else {
+				i += 2
+			}
+			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
 				i++
 			}
 			writeSpace()
+
+		case isMySQL && i+2 < len(sql) && sql[i:i+3] == "/*!":
+			// MySQL executable comment
+			i += 3
+			for i < len(sql) && sql[i] >= '0' && sql[i] <= '9' {
+				i++
+			}
+			writeSpace()
+
+		case i+1 < len(sql) && sql[i:i+2] == "/*":
+			if isPostgres {
+				depth := 1
+				i += 2
+				for i < len(sql) && depth > 0 {
+					if i+1 < len(sql) && sql[i:i+2] == "/*" {
+						depth++
+						i += 2
+						continue
+					}
+					if i+1 < len(sql) && sql[i:i+2] == "*/" {
+						depth--
+						i += 2
+						continue
+					}
+					i++
+				}
+			} else {
+				i += 2
+				for i < len(sql) {
+					if i+1 < len(sql) && sql[i:i+2] == "*/" {
+						i += 2
+						break
+					}
+					i++
+				}
+			}
+			writeSpace()
+
+		case isMySQL && i+1 < len(sql) && sql[i:i+2] == "*/":
+			i += 2
+			writeSpace()
+
 		case sql[i] == '$':
 			end := i + 1
-			for end < len(sql) && (sql[end] == '_' || sql[end] >= 'a' && sql[end] <= 'z' || sql[end] >= 'A' && sql[end] <= 'Z' || sql[end] >= '0' && sql[end] <= '9') { end++ }
+			for end < len(sql) && (sql[end] == '_' || (sql[end] >= 'a' && sql[end] <= 'z') || (sql[end] >= 'A' && sql[end] <= 'Z') || (sql[end] >= '0' && sql[end] <= '9')) {
+				end++
+			}
 			if end < len(sql) && sql[end] == '$' {
 				tag := sql[i : end+1]
 				if closeAt := strings.Index(sql[end+1:], tag); closeAt >= 0 {
+					body := sql[end+1 : end+1+closeAt]
+					// Recursively normalize procedural dollar-quote bodies so DROP TABLE, TRUNCATE, etc.
+					// inside DO $$ or CREATE FUNCTION blocks are preserved for risk policy evaluation.
+					normBody := sqlForPolicyMatchingForEngine(body, engine)
+					if normBody != "" {
+						out.WriteString(" ")
+						out.WriteString(normBody)
+						out.WriteString(" ")
+					}
 					i = end + 1 + closeAt + len(tag)
 					writeSpace()
 					continue
@@ -183,19 +245,27 @@ func sqlForPolicyMatching(sql string) string {
 			}
 			out.WriteByte(sql[i])
 			i++
+
 		case sql[i] == '\'' || sql[i] == '"' || sql[i] == '`':
 			quote := sql[i]
 			i++
 			for i < len(sql) {
 				if sql[i] == quote {
-					if i+1 < len(sql) && sql[i+1] == quote { i += 2; continue }
+					if i+1 < len(sql) && sql[i+1] == quote {
+						i += 2
+						continue
+					}
 					i++
 					break
 				}
-				if sql[i] == '\\' && quote == '\'' && i+1 < len(sql) { i += 2; continue }
+				if sql[i] == '\\' && quote == '\'' && i+1 < len(sql) {
+					i += 2
+					continue
+				}
 				i++
 			}
 			writeSpace()
+
 		default:
 			out.WriteByte(sql[i])
 			i++

@@ -45,6 +45,13 @@ func TestPolicyMatchesAlwaysCritical(t *testing.T) {
 	if match {
 		t.Errorf("did not expect match for CREATE INDEX")
 	}
+
+	// Procedural block with dollar quotes containing DROP TABLE
+	proceduralSQL := "DO $$ BEGIN DROP TABLE legacy_orders; END $$;"
+	match, pattern = p.MatchesAlwaysCritical(proceduralSQL)
+	if !match || pattern != "DROP TABLE" {
+		t.Errorf("expected DROP TABLE match inside DO $$ block, got match=%v pattern=%s", match, pattern)
+	}
 }
 
 func TestPolicyEvaluate(t *testing.T) {

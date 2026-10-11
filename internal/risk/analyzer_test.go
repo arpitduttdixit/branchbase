@@ -88,3 +88,89 @@ func TestRiskAnalyzer(t *testing.T) {
 		t.Errorf("expected non-empty github annotations")
 	}
 }
+
+func TestRiskAnalyzerMultiTableIntrospection(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+
+	mockIntrospect := NewMockIntrospector()
+	// Table 1 has no inbound FKs
+	mockIntrospect.Tables["accounts"] = &TableMetadata{
+		TableName: "accounts",
+		Columns:   []string{"id", "balance"},
+	}
+	// Table 2 has inbound FKs
+	mockIntrospect.Tables["users"] = &TableMetadata{
+		TableName: "users",
+		Columns:   []string{"id", "email"},
+		InboundFKs: []ForeignKeyRef{
+			{ConstraintName: "fk_orders_user", FromTable: "orders", FromColumn: "user_email", ToTable: "users", ToColumn: "email"},
+		},
+	}
+
+	analyzer, err := NewRiskAnalyzer(AnalyzeOptions{
+		RepoRoot:     tmpDir,
+		Engine:       "postgres",
+		Offline:      true,
+		Classifier:   NewHeuristicClassifier(),
+		Introspector: mockIntrospect,
+	})
+	if err != nil {
+		t.Fatalf("failed to create analyzer: %v", err)
+	}
+
+	// Migration touches accounts first, then users
+	multiTableSQL := `
+		ALTER TABLE accounts ADD COLUMN currency VARCHAR(3);
+		ALTER TABLE users DROP COLUMN email;
+	`
+	riskRes, err := analyzer.AnalyzeSQL(ctx, "003_multi.sql", multiTableSQL)
+	if err != nil {
+		t.Fatalf("AnalyzeSQL failed: %v", err)
+	}
+
+	// Should introspect both tables and detect that users.email has inbound FKs!
+	if riskRes.Level != RiskCritical {
+		t.Errorf("expected CRITICAL risk due to second table having FK, got %v", riskRes.Level)
+	}
+	if !riskRes.TouchesFKs {
+		t.Errorf("expected TouchesFKs to be true for second table")
+	}
+}
+
+type failingClassifier struct{}
+
+func (f *failingClassifier) Name() string { return "failing-jev" }
+func (f *failingClassifier) Classify(ctx context.Context, input ClassificationInput) (*MigrationRisk, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func TestRiskAnalyzerOnJevUnavailableBlock(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+
+	analyzer, err := NewRiskAnalyzer(AnalyzeOptions{
+		RepoRoot:   tmpDir,
+		Engine:     "postgres",
+		Classifier: &failingClassifier{},
+	})
+	if err != nil {
+		t.Fatalf("failed to create analyzer: %v", err)
+	}
+
+	// Set policy to block on JEV unavailable
+	analyzer.policy.OnJevUnavailable = "block"
+
+	res, err := analyzer.AnalyzeSQL(ctx, "004_test.sql", "CREATE TABLE t (id INT);")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if res.Level != RiskCritical {
+		t.Errorf("expected RiskCritical when on_jev_unavailable is block, got %v", res.Level)
+	}
+	report := analyzer.EvaluateReport([]MigrationRisk{*res}, "test-branch")
+	if !report.Blocked {
+		t.Errorf("expected report to be blocked")
+	}
+}

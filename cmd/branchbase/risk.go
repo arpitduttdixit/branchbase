@@ -165,7 +165,7 @@ func changedMigrationFiles(repoRoot, defaultBranch string) ([]string, error) {
 		if path == "" {
 			continue
 		}
-		for _, root := range []string{"migrations/", "db/migrations/", "sql/", "migration/"} {
+		for _, root := range []string{"migrations/", "db/migrations/", "sql/", "migration/", "prisma/migrations/"} {
 			if strings.HasPrefix(path, root) {
 				if _, exists := unique[path]; !exists {
 					unique[path] = struct{}{}

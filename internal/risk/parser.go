@@ -37,8 +37,17 @@ var (
 )
 
 // StripCommentsAndTransactions removes SQL comments without changing quoted bodies.
-// SplitStatements separately filters transaction-control statements.
+// Uses PostgreSQL dialect by default (supporting nested block comments).
 func StripCommentsAndTransactions(sql string) string {
+	return StripCommentsAndTransactionsForEngine(sql, "postgres")
+}
+
+// StripCommentsAndTransactionsForEngine removes SQL comments without changing quoted bodies,
+// taking engine dialect differences into account (Postgres nested comments vs MySQL non-nested / executable comments).
+func StripCommentsAndTransactionsForEngine(sql string, engine string) string {
+	isMySQL := strings.EqualFold(engine, "mysql") || strings.EqualFold(engine, "mariadb")
+	isPostgres := strings.EqualFold(engine, "postgres") || strings.EqualFold(engine, "postgresql") || engine == ""
+
 	var out strings.Builder
 	writeSpace := func() {
 		if out.Len() > 0 && out.String()[out.Len()-1] != ' ' {
@@ -46,26 +55,74 @@ func StripCommentsAndTransactions(sql string) string {
 		}
 	}
 	for i := 0; i < len(sql); {
-		if sql[i] == '#' || i+1 < len(sql) && sql[i:i+2] == "--" {
-			if sql[i] == '#' { i++ } else { i += 2 }
-			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' { i++ }
-			writeSpace()
-			continue
-		}
-		if i+1 < len(sql) && sql[i:i+2] == "/*" {
-			depth := 1
-			i += 2
-			for i < len(sql) && depth > 0 {
-				if i+1 < len(sql) && sql[i:i+2] == "/*" { depth++; i += 2; continue }
-				if i+1 < len(sql) && sql[i:i+2] == "*/" { depth--; i += 2; continue }
+		if sql[i] == '#' || (i+1 < len(sql) && sql[i:i+2] == "--") {
+			if sql[i] == '#' {
+				i++
+			} else {
+				i += 2
+			}
+			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
 				i++
 			}
 			writeSpace()
 			continue
 		}
-		if sql[i] == '$' {
+
+		// MySQL executable comments: /*! ... */ or /*!50000 ... */
+		if isMySQL && i+2 < len(sql) && sql[i:i+3] == "/*!" {
+			// MySQL executable comments are executed by the server!
+			// Skip the /*! prefix and optional digits, but keep the code inside it.
+			i += 3
+			for i < len(sql) && sql[i] >= '0' && sql[i] <= '9' {
+				i++
+			}
+			writeSpace()
+			continue
+		}
+
+		if i+1 < len(sql) && sql[i:i+2] == "/*" {
+			if isPostgres {
+				depth := 1
+				i += 2
+				for i < len(sql) && depth > 0 {
+					if i+1 < len(sql) && sql[i:i+2] == "/*" {
+						depth++
+						i += 2
+						continue
+					}
+					if i+1 < len(sql) && sql[i:i+2] == "*/" {
+						depth--
+						i += 2
+						continue
+					}
+					i++
+				}
+			} else {
+				i += 2
+				for i < len(sql) {
+					if i+1 < len(sql) && sql[i:i+2] == "*/" {
+						i += 2
+						break
+					}
+					i++
+				}
+			}
+			writeSpace()
+			continue
+		}
+
+		// Skip closing delimiter of MySQL executable comment if encountered
+		if isMySQL && i+1 < len(sql) && sql[i:i+2] == "*/" {
+			i += 2
+			writeSpace()
+			continue
+		}
+
+		if isPostgres && sql[i] == '$' {
 			end := i + 1
-			for end < len(sql) && (sql[end] == '_' || sql[end] >= 'a' && sql[end] <= 'z' || sql[end] >= 'A' && sql[end] <= 'Z' || sql[end] >= '0' && sql[end] <= '9') { end++ }
+			for end < len(sql) && (sql[end] == '_' || (sql[end] >= 'a' && sql[end] <= 'z') || (sql[end] >= 'A' && sql[end] <= 'Z') || (sql[end] >= '0' && sql[end] <= '9')) {
+				end++
+			}
 			if end < len(sql) && sql[end] == '$' {
 				tag := sql[i : end+1]
 				if closeAt := strings.Index(sql[end+1:], tag); closeAt >= 0 {
@@ -83,11 +140,19 @@ func StripCommentsAndTransactions(sql string) string {
 			for i < len(sql) {
 				out.WriteByte(sql[i])
 				if sql[i] == quote {
-					if i+1 < len(sql) && sql[i+1] == quote { out.WriteByte(sql[i+1]); i += 2; continue }
-				i++
+					if i+1 < len(sql) && sql[i+1] == quote {
+						out.WriteByte(sql[i+1])
+						i += 2
+						continue
+					}
+					i++
 					break
 				}
-				if sql[i] == '\\' && quote == '\'' && i+1 < len(sql) { out.WriteByte(sql[i+1]); i += 2; continue }
+				if sql[i] == '\\' && quote == '\'' && i+1 < len(sql) {
+					out.WriteByte(sql[i+1])
+					i += 2
+					continue
+				}
 				i++
 			}
 			continue
@@ -98,9 +163,14 @@ func StripCommentsAndTransactions(sql string) string {
 	return strings.TrimSpace(out.String())
 }
 
-// SplitStatements splits a SQL string by semicolon into individual executable statements.
+// SplitStatements splits a SQL string by semicolon into individual executable statements using Postgres dialect.
 func SplitStatements(sql string) []string {
-	cleaned := StripCommentsAndTransactions(sql)
+	return SplitStatementsForEngine(sql, "postgres")
+}
+
+// SplitStatementsForEngine splits a SQL string by semicolon into individual executable statements for a given engine.
+func SplitStatementsForEngine(sql string, engine string) []string {
+	cleaned := StripCommentsAndTransactionsForEngine(sql, engine)
 	if cleaned == "" {
 		return nil
 	}
@@ -109,8 +179,10 @@ func SplitStatements(sql string) []string {
 	var current strings.Builder
 	inSingleQuote := false
 	inDoubleQuote := false
+	inBacktickQuote := false
 	inDollarQuote := false
 	var dollarTag string
+	isPostgres := strings.EqualFold(engine, "postgres") || strings.EqualFold(engine, "postgresql") || engine == ""
 
 	runes := []rune(cleaned)
 	n := len(runes)
@@ -119,7 +191,7 @@ func SplitStatements(sql string) []string {
 		r := runes[i]
 
 		// Handle PostgreSQL Dollar Quotes $$ or $tag$
-		if !inSingleQuote && !inDoubleQuote {
+		if isPostgres && !inSingleQuote && !inDoubleQuote && !inBacktickQuote {
 			if r == '$' {
 				if inDollarQuote {
 					// Check if closing tag matches
@@ -162,14 +234,16 @@ func SplitStatements(sql string) []string {
 				current.WriteRune(runes[i])
 				continue
 			}
-			if r == '\'' && !inDoubleQuote {
+			if r == '\'' && !inDoubleQuote && !inBacktickQuote {
 				inSingleQuote = !inSingleQuote
-			} else if r == '"' && !inSingleQuote {
+			} else if r == '"' && !inSingleQuote && !inBacktickQuote {
 				inDoubleQuote = !inDoubleQuote
+			} else if r == '`' && !inSingleQuote && !inDoubleQuote {
+				inBacktickQuote = !inBacktickQuote
 			}
 		}
 
-		if r == ';' && !inSingleQuote && !inDoubleQuote && !inDollarQuote {
+		if r == ';' && !inSingleQuote && !inDoubleQuote && !inBacktickQuote && !inDollarQuote {
 			stmt := strings.TrimSpace(current.String())
 			if stmt != "" && !isIgnoredStatement(stmt) {
 				statements = append(statements, stmt)
@@ -210,7 +284,7 @@ func CleanIdentifier(raw string) string {
 
 // ParseDiff parses all SQL statements and classifies individual DDL operations.
 func (p *DDLParser) ParseDiff(sqlContent string) ([]DDLOperation, error) {
-	statements := SplitStatements(sqlContent)
+	statements := SplitStatementsForEngine(sqlContent, p.Engine)
 	var operations []DDLOperation
 
 	for idx, stmt := range statements {
