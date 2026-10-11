@@ -18,7 +18,7 @@ Los desarrolladores en comunidades como **Hacker News**, **Reddit** (`r/programm
 | **Cero Cicatrices de Batalla** | La IA habla desde una perspectiva abstracta y neutral ("El branching de base de datos es vital..."). | **Cuenta anécdotas reales:** "El martes pasado me cargué la base de datos de desarrollo por décima vez por una migración de Stripe". |
 | **Exceso de Emojis Infantiles** | La IA decora cada título y punto con 🚀, 💡, 🔥, ⚡, 🛠️. | **Elimina el 90% de los emojis.** Un post técnico en Reddit no necesita más de 0 o 1 emoji. |
 | **Cierres con Preguntas de Compromiso Falsas** | *"En conclusión, X es el futuro. ¿Qué opinas? ¡Déjame tus comentarios abajo!"* | **Termina abruptamente con un reto técnico:** *"El código es MIT. Si alguien sabe cómo optimizar `FICLONE` en Linux, feedback bienvenido."* |
-| **Voz Pasiva y Tono Corporativo** | *"Se ha implementado una arquitectura modular orientada a..."* | **Voz activa y directa:** *"Puse un proxy TCP en el puerto 5433 que intercepta el socket y consulta `git rev-parse`."* |
+| **Voz Pasiva y Tono Corporativo** | *"Se ha implementado una arquitectura modular orientada a..."* | **Voz activa y directa:** *"Puse un proxy TCP en el puerto 5432 que intercepta el socket, lee `.git/HEAD` en memoria en ~40µs y enruta la conexión a una DB clonada con TEMPLATE."* |
 
 ---
 
@@ -62,12 +62,12 @@ Evita terminantemente estas palabras y construcciones en tus posts técnicos:
 #### ✅ Ejemplo Humano Técnico (Alta conversión y respeto comunitario):
 > *Estaba harto de ejecutar `docker compose down -v` cada vez que cambiaba de rama en Git y una migración fallaba en PostgreSQL. Perdía 15 minutos en cada cambio de contexto recreando esquemas y cargando seeds.*
 >
-> *Para resolverlo escribí **BranchBase** en Go. Básicamente levanta un proxy TCP en el puerto 5433 que intercepta las conexiones de tu app, mira qué rama de Git tienes activa (`git rev-parse --abbrev-ref HEAD`) y redirige el socket a una base de datos clonada con `CREATE DATABASE ... TEMPLATE` (en Postgres) o copias CoW (en SQLite).*
+> *Para resolverlo escribí **BranchBase** en Go. Básicamente levanta un proxy TCP en el puerto 5432 que intercepta las conexiones de tu app, lee `.git/HEAD` en memoria en ~40µs (sin subshells) y redirige el socket a una base de datos clonada con `CREATE DATABASE ... TEMPLATE` (en Postgres), copias CoW (en SQLite) o replicación de tablas (en MySQL).*
 >
 > *El binario es único, no tiene dependencias pesadas y está bajo licencia MIT:*
 > *Repo: https://github.com/oscarbol09/branchbase*
 >
-> *¿Alguien con experiencia en el protocolo de handshake de MySQL/MariaDB que pueda revisar el parser del proxy?*
+> *¿Alguien con experiencia en el protocolo de handshake de MySQL/MariaDB que pueda revisar el parser del proxy en `internal/proxy/mysqlwire`?*
 
 ---
 
@@ -149,17 +149,17 @@ Like many of you, I work on multiple Git branches daily with local PostgreSQL an
 I wrote **BranchBase** to automate this locally using Go's standard library.
 
 ### How it works under the hood:
-1. **TCP Proxy (`internal/proxy`):** It runs a lightweight proxy on port 5433. When your ORM connects, it checks the current Git branch via `git rev-parse --abbrev-ref HEAD`.
-2. **Template Cloning (`internal/driver/postgres`):** It intercepts the connection and clones the base DB using `CREATE DATABASE ... TEMPLATE` after terminating active idle connections with `pg_terminate_backend()`.
-3. **SQLite Support (`internal/driver/sqlite`):** On Linux/macOS, it uses copy-on-write syscalls (`FICLONE` / `clonefile`) for instant disk snapshots.
+1. **TCP Proxy (`internal/proxy`):** It runs a lightweight proxy on port 5432. When your ORM connects, it inspects `.git/HEAD` directly in memory (~40µs, zero subshells) to determine the active branch and rewrites the database target on the wire.
+2. **Template Cloning (`internal/driver/postgres`):** It clones the base DB using `CREATE DATABASE ... TEMPLATE` after terminating active idle connections with `pg_terminate_backend()`.
+3. **Multi-Engine Support:** Supports PostgreSQL, MySQL (`mysqlwire` handshake parser & table replication), SQLite (`FICLONE` / `clonefile` CoW syscalls), and MongoDB (`$out` aggregation cloning).
 
 ### Tech Stack:
-- Go 1.22+ (zero third-party web frameworks, standard `net`, `io`, `database/sql`)
-- Wire protocol sniffer for PostgreSQL & MySQL startup packets.
+- Go 1.26+ (standard library `net`, `io`, `database/sql` + pure Go wire-protocol parsers)
+- Handshake rewriters for PostgreSQL StartupMessage and MySQL HandshakeResponse41.
 - MIT Licensed.
 Repo: https://github.com/oscarbol09/branchbase
 
-I would love feedback from the community, especially regarding the MySQL wire protocol handshake parser in `internal/proxy/mysql.go` if anyone has deep protocol experience.
+I would love feedback from the community, especially regarding the MySQL wire protocol handshake parser in `internal/proxy/mysqlwire` if anyone has deep protocol experience.
 ```
 
 ---
@@ -171,18 +171,18 @@ I would love feedback from the community, especially regarding the MySQL wire pr
 ```markdown
 Hey webdevs,
 
-Quick question: how many times this week have you seen:
-`column "user_id" does not exist` or `ActiveRecord::PendingMigrationError` right after switching git branches?
+If you've ever had Prisma, Drizzle, or ActiveRecord crash with schema mismatches right after a git switch, you know the headache:
+`column "user_id" does not exist` or `ActiveRecord::PendingMigrationError`.
 
 I got fed up with running `prisma migrate reset` or wiping Docker volumes during context switches, so I built **BranchBase**.
 
 ### What it does:
-You point your `.env` `DATABASE_URL` to `localhost:5433` (BranchBase proxy) instead of `5432`.
+You point your `.env` `DATABASE_URL` to the BranchBase proxy port `5432` while remapping your container port to `5433`.
 - When you are on `git checkout feature/auth`, you read/write to `mydb_feature_auth`.
 - When you `git checkout main`, your connection transparently routes back to `mydb_main`.
 - When you delete or merge a branch, running `branchbase prune` wipes orphan databases.
 
-It's 100% local, runs as a single binary, supports PostgreSQL, MySQL, and SQLite, and is open source (MIT).
+It's 100% local, runs as a single binary, supports PostgreSQL, MySQL, SQLite, and MongoDB, and is open source (MIT).
 
 - GitHub: https://github.com/oscarbol09/branchbase
 - Docs: https://oscarbol09.github.io/branchbase/
@@ -207,7 +207,7 @@ Switching Git branches while testing schema changes (migrations, rollbacks, seed
 ### The Solution:
 BranchBase is a zero-config CLI that mirrors your Git branches into isolated database copies in milliseconds. It intercepts your local DB connections via a lightweight proxy and routes your app to the correct branch database automatically.
 
-- **Stack:** Go standard library + SQLite/Postgres/MySQL drivers.
+- **Stack:** Go standard library + Postgres, MySQL, SQLite, and MongoDB drivers.
 - **Privacy:** 100% offline, zero cloud telemetry, MIT license.
 - **Terminal UI:** Includes a built-in TUI (`branchbase tui`) to inspect active branch databases and storage usage.
 

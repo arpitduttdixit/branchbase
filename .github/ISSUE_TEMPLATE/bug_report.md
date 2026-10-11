@@ -10,13 +10,19 @@ assignees: ""
 
 A clear and concise description of what the bug is.
 
-## Environment & Versions
+## Environment & Diagnostics
 
-- **BranchBase Version:** (e.g. `v0.1.0-alpha` or git commit hash)
-- **Database Engine:** (e.g. PostgreSQL 16, SQLite 3.45)
-- **Host OS:** (e.g. Ubuntu 22.04, macOS 14 Sonoma, Windows 11)
-- **Go Version:** (if compiling from source, e.g. `go version go1.22.4`)
-- **Docker Version:** (if applicable)
+Run `branchbase doctor` in your repository and paste the output:
+
+```text
+Paste output of `branchbase doctor` here
+```
+
+If `branchbase doctor` cannot be run, specify:
+- **BranchBase Version:** (e.g. `v0.4.0` or git commit hash)
+- **Database Engine:** (e.g. PostgreSQL 16, MySQL 8.0, SQLite 3.45, MongoDB 7)
+- **Host OS:** (e.g. Ubuntu 24.04, macOS 14 Sonoma, Windows 11)
+- **Go Version:** (if compiling from source, e.g. `go version go1.26.0`)
 
 ## Steps to Reproduce
 

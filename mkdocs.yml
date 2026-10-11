@@ -65,6 +65,7 @@ nav:
   - Framework Guides:
       - Prisma ORM: guides/prisma.md
       - Docker Compose: guides/docker-compose.md
+      - Risk Gate: guides/risk-gate.md
   - Architecture & Design:
       - System Architecture: architecture.md
   - Contributing:

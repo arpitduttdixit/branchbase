@@ -33,7 +33,7 @@ branchbase init
 ```
 This generates `.branchbase.json` and installs automated Git hooks in `.git/hooks/`.
 
-### 2. Configure your `.env`
+### 2. Configure your `.env` and `schema.prisma`
 
 Point Prisma to the BranchBase transparent proxy (default port: `5432`):
 
@@ -41,6 +41,17 @@ Point Prisma to the BranchBase transparent proxy (default port: `5432`):
 # .env
 DATABASE_URL="postgresql://postgres:postgres@localhost:5432/myapp_dev?schema=public"
 ```
+
+Configure your `prisma/schema.prisma` datasource:
+
+```prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+```
+
+> **Warning:** Do not configure a `directUrl` pointing directly to backend container port `5433`. When `directUrl` is configured, Prisma directs migrations to the underlying container directly, bypassing BranchBase and mutating the base database. Keep both runtime queries and migrations pointing to the BranchBase proxy port `5432`.
 
 ### 3. Start the BranchBase Proxy
 
@@ -76,11 +87,13 @@ branchbase status
 ```
 Output:
 ```text
-BranchBase Status
+🌿 BranchBase Status
   • Active Git Branch: main
+  • Sanitized Name:    main
   • Target Database:   myapp_dev
   • Driver:            postgres
   • Proxy Port:        5432 -> Backend: 127.0.0.1:5433
+  • Git Hooks:         ✅ Active (.git/hooks/post-checkout)
 ```
 
 ---

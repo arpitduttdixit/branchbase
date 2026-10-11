@@ -22,13 +22,13 @@ branchbase version
 
 ## Go Toolchain (`go install`)
 
-If you have Go 1.22+ installed on your system:
+If you have Go 1.26+ installed on your system:
 
 ```bash
-go install github.com/oscarbol09/branchbase/cmd/branchbase@latest
+go install github.com/branchbase/branchbase/cmd/branchbase@latest
 ```
 
-Make sure your `$GOPATH/bin` or `$HOME/go/bin` is in your system `$PATH`.
+Ensure `$GOPATH/bin` or `$HOME/go/bin` is included in your system `$PATH`.
 
 ---
 
@@ -43,10 +43,19 @@ Pre-built binaries for Linux, macOS (Apple Silicon & Intel), and Windows are ava
    - **Linux x86_64:** `branchbase_*_linux_amd64.tar.gz`
    - **Linux ARM64:** `branchbase_*_linux_arm64.tar.gz`
    - **Windows x64:** `branchbase_*_windows_amd64.zip`
-3. Extract and move the binary to your `$PATH`:
+
+3. Extract and add to your `$PATH`:
+
+   **Linux / macOS:**
    ```bash
    tar -xzf branchbase_*_linux_amd64.tar.gz
    sudo mv branchbase /usr/local/bin/
+   ```
+
+   **Windows (PowerShell):**
+   ```powershell
+   Expand-Archive -Path branchbase_*_windows_amd64.zip -DestinationPath C:\tools\branchbase
+   [Environment]::SetEnvironmentVariable("Path", $env:Path + ";C:\tools\branchbase", "User")
    ```
 
 ---

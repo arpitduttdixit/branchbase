@@ -37,7 +37,7 @@ Every developer working with Docker, local PostgreSQL, MySQL, or SQLite has suff
 
 ## The Solution: BranchBase
 
-**BranchBase** brings instant, zero-copy database branching directly to your **local machine and Docker containers**.
+**BranchBase** pairs automated Git branch transitions with database cloning mechanisms and a transparent wire-protocol TCP proxy, keeping your connection strings stable while routing queries to branch-specific databases.
 
 ```
                            +---------------------------+
@@ -51,21 +51,32 @@ Every developer working with Docker, local PostgreSQL, MySQL, or SQLite has suff
                                          |
                     +--------------------+--------------------+
                     |                                         |
-          (Detects new branch)                      (Zero-Copy Snapshot)
+          (Detects new branch)                      (Branch Provisioning)
                     |                                         |
                     v                                         v
 +---------------------------------------+   +------------------------------------+
-|       BranchBase Proxy (Port 5432)    |   |     Local Database (PostgreSQL)    |
+|   BranchBase Proxy (Postgres / MySQL) |   |          Local Database            |
 +---------------------------------------+   +------------------------------------+
-| - App connection string NEVER changes |   | - `db_project_main` (frozen)       |
+| - App connection string stays stable  |   | - `db_project_main` (frozen)       |
 | - Automatically routes queries to the |   | - `db_project_branch_b` (active)   |
-|   active Git branch database!         |   |   (Created instantly via TEMPLATE) |
+|   active Git branch database!         |   |   (Created via engine driver)      |
 +---------------------------------------+   +------------------------------------+
 ```
 
 ### Key Highlights
-- **Instant Branching:** Creates a fresh, isolated branch database in milliseconds using PostgreSQL `CREATE DATABASE ... TEMPLATE` or filesystem copy-on-write (reflink/APFS/Btrfs for SQLite).
-- **Transparent Connection Proxy:** Your app's `DATABASE_URL=postgres://user:pass@localhost:5432/myapp` **never changes**. The local proxy automatically inspects which Git branch is active in your working directory and routes traffic to that branch's database.
-- **Automated Git Hook:** Hooks into `post-checkout` and `post-merge`. You simply use standard `git checkout` or `git switch`.
-- **Automatic Cleanup (`prune`):** When you delete or merge a Git branch, `branchbase` safely tears down the associated ephemeral database.
-- **100% Local & Offline:** No cloud telemetry, no subscription fees, no internet needed.
+- **Engine-Native Branching:** Creates isolated branch databases using PostgreSQL `CREATE DATABASE ... TEMPLATE`, MySQL schema/data replication, SQLite filesystem Copy-on-Write (`clonefile` / `FICLONE`), or MongoDB aggregation pipelines.
+- **Transparent Wire Proxy:** Your application connects to a stable local port (`5432` for PostgreSQL or `3306` for MySQL). The proxy inspects the active Git branch from `.git/HEAD` and routes connections to that branch's database without touching `.env`.
+- **Automated Git Hook:** Hooks into `post-checkout` and `post-merge` via lightweight POSIX scripts that run asynchronously.
+- **Automatic Cleanup (`prune`):** When you delete or merge a Git branch, `branchbase prune` safely tears down the associated ephemeral database.
+- **100% Local & Offline:** No cloud telemetry, no subscription fees, and no internet connection required.
+
+---
+
+## Engine Support & Mechanism Matrix
+
+| Engine | Branching Mechanism | Proxy Routed | Fast Snapshot Requirements |
+| :--- | :--- | :---: | :--- |
+| **PostgreSQL** | `CREATE DATABASE ... TEMPLATE` | Yes (`5432`) | Terminates active template connections |
+| **MySQL / MariaDB** | Table-by-table schema & data copy (`LIKE` + `SELECT`) | Yes (`3306`) | Cleartext proxy mode rejects `ClientSSL` (fail-closed) |
+| **SQLite** | Filesystem CoW / Reflink (`clonefile` / `FICLONE`) | No (CLI/Hook) | Requires WAL checkpointing; fallback to copy on NTFS/ext4 |
+| **MongoDB** | Aggregation pipeline (`$out`) + index recreation | No (CLI/Hook) | Standard collections supported |

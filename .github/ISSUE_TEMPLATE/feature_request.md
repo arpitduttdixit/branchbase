@@ -6,9 +6,17 @@ labels: ["enhancement", "proposal"]
 assignees: ""
 ---
 
-## Is your feature request related to a problem? Please describe.
+## Problem Statement
 
-A clear and concise description of what the problem is. (e.g. "I'm always frustrated when...")
+A clear description of the limitation or workflow problem you are experiencing.
+
+## Affected Subsystem
+
+- [ ] Transparent Proxy / Wire Protocols (`pgwire`, `mysqlwire`)
+- [ ] Database Drivers (Postgres, MySQL, SQLite, MongoDB)
+- [ ] Git Lifecycle & Hooks (`post-checkout`, `post-merge`)
+- [ ] Risk Gate & Migration Safety (`branchbase risk`)
+- [ ] CLI, TUI & Diagnostics (`doctor`, `tui`)
 
 ## Describe the Solution You'd Like
 

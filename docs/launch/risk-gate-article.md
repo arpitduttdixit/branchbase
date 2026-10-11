@@ -6,18 +6,17 @@
 
 ## The Problem: Ephemeral Branching Meets Destructive Migrations
 
-At **BranchBase**, our core mission is simple: provide instant, isolated database branches triggered natively by Git workflow events (`git checkout`, `git switch`, `post-merge`). When an engineer switches to `feature/auth-redesign`, BranchBase transparently provisions an isolated copy of the database and redirects the local proxy.
+When you build a tool that automates database branching on `git checkout`, you quickly discover where the edge cases bite: destructive schema migrations.
 
-However, as developer adoption grew, a critical edge case emerged: **Destructive schema migrations applied during checkout.**
+When an engineer switches to `feature/auth-redesign`, BranchBase transparently provisions an isolated copy of the database and redirects the local proxy. But consider what happens next:
 
-Consider a developer switching branches:
 ```bash
 git checkout feature/deprecate-email-column
 # -> post-checkout triggers local migration runner
 # -> executes: ALTER TABLE users DROP COLUMN email;
 ```
 
-If `users.email` is actively referenced by foreign key constraints across `orders`, `billing`, and `notifications`, applying this migration in a shared staging environment or local branch destroys relational integrity and leaves the developer with broken state.
+If `users.email` is actively referenced by foreign key constraints across `orders`, `billing`, and `notifications`, applying this migration destroys relational integrity and leaves the developer with broken state.
 
 Traditional linters only inspect static syntax. They lack **runtime schema context** (which tables reference what) and **probabilistic reasoning** about migration intent.
 
@@ -72,9 +71,11 @@ Jev provides **typed decision primitives** (*Choice* and *Noul*) with calibrated
 A Git hook must execute in `<150ms` to preserve developer ergonomics. An external API call takes `400ms - 1.5s`.
 
 We solved this with a composite cache key:
-$$\text{Key} = \text{SHA256}(\text{migration\_sql} \mathbin{\Vert} \text{"::"} \mathbin{\Vert} \text{table\_schema\_signature})$$
+```go
+key := fmt.Sprintf("%x", sha256.Sum256([]byte(migrationSQL + "::" + schemaSignature)))
+```
 
-If the table schema has not changed and the migration file hash matches, the evaluation is returned in $<1\text{ ms}$ from `.branchbase/cache/risk_cache.json`.
+If the table schema has not changed and the migration file hash matches, the evaluation is returned in under 1ms from `.branchbase/cache/risk_cache.json`.
 
 ### 2. Live Catalog Introspection (Grounding Decisions in Reality)
 Prompting an AI with only `ALTER TABLE users DROP COLUMN email;` is insufficient. The engine cannot know whether `email` is an isolated attribute or the target of 5 foreign key constraints.
@@ -107,7 +108,7 @@ We built terminal mode detection into the confirmation prompt:
 ```go
 func PromptConfirmation(r io.Reader, w io.Writer, prompt string) (bool, error) {
     if f, ok := r.(*os.File); ok {
-        if (f.Stat().Mode() & os.ModeCharDevice) == 0 {
+        if !IsTerminal(f) {
             return false, ErrNonInteractiveTerminal
         }
     }

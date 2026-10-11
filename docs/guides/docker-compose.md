@@ -1,12 +1,12 @@
 # Docker Compose Integration
 
-BranchBase seamlessly integrates with Docker and Docker Compose workflows.
+BranchBase auto-detects database services from Docker Compose configurations and sets up port routing for the transparent proxy.
 
 ---
 
-## Zero-Config Auto-Detection
+## Auto-Detection during `branchbase init`
 
-When you run `branchbase init`, BranchBase automatically scans for:
+When you run `branchbase init`, BranchBase scans for:
 - `docker-compose.yml`
 - `docker-compose.yaml`
 - `compose.yml`
@@ -14,7 +14,7 @@ When you run `branchbase init`, BranchBase automatically scans for:
 
 It automatically extracts:
 - **Database service engine:** PostgreSQL (`postgres:16`), MySQL (`mysql:8`), MariaDB (`mariadb:11`).
-- **Internal & host port mappings:** e.g., `5432:5432` or `5433:5432`.
+- **Host port mappings:** e.g., `5433:5432` or `3307:3306`.
 - **Environment credentials:** `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `MYSQL_DATABASE`, etc.
 
 ---
@@ -23,10 +23,9 @@ It automatically extracts:
 
 To use BranchBase's transparent proxy with Docker Compose:
 
-1. Map your Docker container to an internal port (e.g. `5433`):
+1. Map your container's database port to an alternative host port (e.g. `5433` on the host to `5432` in the container). This frees the standard host port (`5432`) for the BranchBase proxy:
    ```yaml
    # docker-compose.yml
-   version: '3.8'
    services:
      postgres:
        image: postgres:16-alpine
@@ -35,26 +34,34 @@ To use BranchBase's transparent proxy with Docker Compose:
          POSTGRES_PASSWORD: secretpassword
          POSTGRES_DB: myapp_dev
        ports:
-         - "5433:5432"  # Exposed internally to port 5433
+         - "5433:5432"  # Host port 5433 forwards to container port 5432
    ```
 
-2. Point BranchBase proxy to forward from standard port `5432` to container port `5433`:
+2. Configure BranchBase to listen on standard port `5432` and forward to backend port `5433`:
    ```json
    // .branchbase.json
    {
+     "version": "1",
      "driver": "postgres",
-     "base_database": "myapp_dev",
-     "proxy_port": 5432,
-     "target_host": "127.0.0.1",
-     "target_port": 5433,
-     "username": "postgres",
-     "password": "secretpassword"
+     "connection": {
+       "host": "127.0.0.1",
+       "port": 5433,
+       "user": "postgres",
+       "password": "secretpassword",
+       "base_database": "myapp_dev"
+     },
+     "proxy": {
+       "enabled": true,
+       "listen_host": "127.0.0.1",
+       "listen_port": 5432,
+       "default_branch": "main"
+     }
    }
    ```
 
-3. Run your application querying standard port `5432`:
+3. Start the proxy and run your application connecting to standard port `5432`:
    ```bash
    branchbase proxy
    ```
 
-BranchBase intercepts connections on port 5432, rewrites the target database to your active branch, and forwards to the Docker container on port 5433.
+BranchBase intercepts connections on `127.0.0.1:5432`, rewrites the startup handshake with your active branch database name, and streams traffic directly to the backend container on port `5433`.
