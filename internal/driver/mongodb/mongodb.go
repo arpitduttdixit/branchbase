@@ -32,6 +32,23 @@ func init() {
 		defaultBranch, _ := params["default_branch"].(string)
 
 		if uri == "" {
+			host, _ := params["host"].(string)
+			port, _ := params["port"].(int)
+			user, _ := params["user"].(string)
+			password, _ := params["password"].(string)
+			if host != "" {
+				if port <= 0 {
+					port = 27017
+				}
+				if user != "" && password != "" {
+					uri = fmt.Sprintf("mongodb://%s:%s@%s:%d", user, password, host, port)
+				} else {
+					uri = fmt.Sprintf("mongodb://%s:%d", host, port)
+				}
+			}
+		}
+
+		if uri == "" {
 			return nil, fmt.Errorf("missing 'uri' for mongodb driver")
 		}
 		if baseDb == "" {
@@ -65,11 +82,19 @@ func (d *MongoDBDriver) Name() string {
 	return "mongodb"
 }
 
+func (d *MongoDBDriver) isBaseBranch(sanitized string) bool {
+	def := strings.TrimSpace(d.cfg.DefaultBranch)
+	if def == "" {
+		return sanitized == "main" || sanitized == "master" || sanitized == "default"
+	}
+	return sanitized == git.SanitizeBranchName(def)
+}
+
 func (d *MongoDBDriver) formatDBName(branchName string) string {
-	if branchName == d.cfg.DefaultBranch {
+	sanitized := git.SanitizeBranchName(branchName)
+	if d.isBaseBranch(sanitized) {
 		return d.cfg.BaseDatabase
 	}
-	sanitized := git.SanitizeBranchName(branchName)
 	return fmt.Sprintf("%s_%s", d.cfg.BaseDatabase, sanitized)
 }
 
@@ -91,6 +116,7 @@ func (d *MongoDBDriver) CreateBranch(ctx context.Context, sourceBranch, targetBr
 	targetDB := d.formatDBName(targetBranch)
 
 	srcDb := d.client.Database(sourceDB)
+	targetDb := d.client.Database(targetDB)
 	
 	colls, err := srcDb.ListCollectionNames(ctx, bson.M{})
 	if err != nil {
@@ -103,6 +129,7 @@ func (d *MongoDBDriver) CreateBranch(ctx context.Context, sourceBranch, targetBr
 			continue
 		}
 		srcColl := srcDb.Collection(collName)
+		targetColl := targetDb.Collection(collName)
 		
 		// Use aggregation $out to copy to the target database
 		pipeline := mongo.Pipeline{
@@ -118,6 +145,45 @@ func (d *MongoDBDriver) CreateBranch(ctx context.Context, sourceBranch, targetBr
 		}
 		if err := cursor.Close(ctx); err != nil {
 			return fmt.Errorf("failed to close cursor: %w", err)
+		}
+
+		// Recreate non-default indexes on the target collection
+		idxCursor, err := srcColl.Indexes().List(ctx)
+		if err == nil {
+			var indexModels []mongo.IndexModel
+			for idxCursor.Next(ctx) {
+				var doc bson.M
+				if err := idxCursor.Decode(&doc); err == nil {
+					name, _ := doc["name"].(string)
+					if name == "_id_" {
+						continue
+					}
+					var keyDoc bson.M
+					if m, ok := doc["key"].(bson.M); ok {
+						keyDoc = m
+					} else if dKey, okD := doc["key"].(bson.D); okD {
+						keyDoc = dKey.Map()
+					}
+					opts := options.Index().SetName(name)
+					if unique, ok := doc["unique"].(bool); ok {
+						opts.SetUnique(unique)
+					}
+					if sparse, ok := doc["sparse"].(bool); ok {
+						opts.SetSparse(sparse)
+					}
+					if expire, ok := doc["expireAfterSeconds"].(int32); ok {
+						opts.SetExpireAfterSeconds(expire)
+					}
+					indexModels = append(indexModels, mongo.IndexModel{
+						Keys:    keyDoc,
+						Options: opts,
+					})
+				}
+			}
+			_ = idxCursor.Close(ctx)
+			if len(indexModels) > 0 {
+				_, _ = targetColl.Indexes().CreateMany(ctx, indexModels)
+			}
 		}
 	}
 	return nil

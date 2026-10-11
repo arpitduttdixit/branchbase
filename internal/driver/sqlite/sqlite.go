@@ -177,15 +177,9 @@ func (d *SqliteDriver) CreateBranch(ctx context.Context, sourceBranch, targetBra
 		}
 	}()
 
-	reservation, err := os.OpenFile(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, srcInfo.Mode().Perm())
-	if err != nil {
-		return fmt.Errorf("failed to reserve SQLite branch path %q: %w", targetPath, err)
-	}
-	if err := reservation.Close(); err != nil {
-		cleanupErr := os.Remove(targetPath)
-		return errors.Join(fmt.Errorf("failed to close SQLite branch reservation %q: %w", targetPath, err), cleanupErr)
-	}
-
+	// Do not pre-create targetPath with OpenFile: macOS APFS clonefile(2) requires
+	// that destination file does not exist (returns EEXIST if pre-created).
+	// Mutual exclusion is safely guaranteed by copyMarker (.branchbase-copying) above.
 	if err := CloneFile(sourcePath, targetPath); err != nil {
 		cleanupErr := os.Remove(targetPath)
 		return errors.Join(fmt.Errorf("failed to snapshot sqlite database from %q to %q: %w", sourcePath, targetPath, err), cleanupErr)
