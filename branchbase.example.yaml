@@ -5,7 +5,7 @@
 version: "1"
 
 # Database engine to manage
-# Supported: postgres, mysql, mariadb, sqlite (planned: mongodb)
+# Supported: postgres, mysql, mariadb, sqlite, mongodb
 driver: "postgres"
 
 # Target underlying database configuration (e.g. your local Docker container)
@@ -16,6 +16,7 @@ connection:
   password: "${DB_PASSWORD:-password}"
   base_database: "myapp_dev"   # Canonical base database (e.g., matching main/master)
   # path: "myapp_dev.db"       # For SQLite: path to local database file
+  # uri: "mongodb://root:root@127.0.0.1:27017/admin" # For MongoDB: connection URI
 
 # Transparent proxy settings
 proxy:

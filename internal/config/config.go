@@ -28,6 +28,7 @@ type ConnectionConfig struct {
 	BaseDatabase string `json:"base_database" yaml:"base_database"`
 	Path         string `json:"path,omitempty" yaml:"path,omitempty"`               // For SQLite
 	SocketPath   string `json:"socket_path,omitempty" yaml:"socket_path,omitempty"` // For UNIX domain sockets
+	URI          string `json:"uri,omitempty" yaml:"uri,omitempty"`                 // For MongoDB
 }
 
 type TLSConfig struct {

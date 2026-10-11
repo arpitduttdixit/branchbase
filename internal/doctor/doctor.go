@@ -48,6 +48,10 @@ func driverParamsForConfig(cfg *config.Config) map[string]interface{} {
 	} else if cfg.Connection.BaseDatabase != "" {
 		params["path"] = cfg.Connection.BaseDatabase
 	}
+
+	if cfg.Connection.URI != "" {
+		params["uri"] = cfg.Connection.URI
+	}
 	return params
 }
 

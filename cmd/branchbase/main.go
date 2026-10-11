@@ -420,6 +420,11 @@ func driverParamsForConfig(cfg *config.Config, lightweight bool) map[string]inte
 		params["path"] = cfg.Connection.BaseDatabase
 	}
 
+	// For MongoDB
+	if cfg.Connection.URI != "" {
+		params["uri"] = cfg.Connection.URI
+	}
+
 	return params
 }
 
