@@ -42,6 +42,7 @@ func ResolveCurrentBranch(repoPath string) (string, error) {
 			if !filepath.IsAbs(targetDir) {
 				targetDir = filepath.Join(repoPath, targetDir)
 			}
+			gitDir = targetDir
 			headPath = filepath.Join(targetDir, "HEAD")
 		}
 	}
@@ -61,6 +62,19 @@ func ResolveCurrentBranch(repoPath string) (string, error) {
 			return "", ErrUnreadableHEAD
 		}
 		return branch, nil
+	}
+
+	// Check if repository is in the middle of a git rebase before treating as detached HEAD
+	for _, rebaseRefFile := range []string{"rebase-merge/head-name", "rebase-apply/head-name"} {
+		refPath := filepath.Join(gitDir, rebaseRefFile)
+		if refBytes, err := os.ReadFile(refPath); err == nil {
+			refContent := strings.TrimSpace(string(refBytes))
+			if strings.HasPrefix(refContent, "refs/heads/") {
+				return strings.TrimPrefix(refContent, "refs/heads/"), nil
+			} else if refContent != "" {
+				return refContent, nil
+			}
+		}
 	}
 
 	// If it contains a raw commit hash (40 chars), we are in detached HEAD

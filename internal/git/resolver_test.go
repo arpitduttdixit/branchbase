@@ -296,3 +296,37 @@ func TestResolveLocalBranchesFromFSWorktreeCommondir(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveCurrentBranchRebase(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+
+	gitDir := filepath.Join(tempDir, ".git")
+	if err := os.MkdirAll(gitDir, 0755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+
+	// In detached HEAD during rebase, HEAD has a 40-char SHA
+	headPath := filepath.Join(gitDir, "HEAD")
+	if err := os.WriteFile(headPath, []byte("0123456789abcdef0123456789abcdef01234567\n"), 0644); err != nil {
+		t.Fatalf("write HEAD: %v", err)
+	}
+
+	// Git creates .git/rebase-merge/head-name with the target branch
+	rebaseDir := filepath.Join(gitDir, "rebase-merge")
+	if err := os.MkdirAll(rebaseDir, 0755); err != nil {
+		t.Fatalf("mkdir rebase-merge: %v", err)
+	}
+	headNamePath := filepath.Join(rebaseDir, "head-name")
+	if err := os.WriteFile(headNamePath, []byte("refs/heads/feature/checkout-v2\n"), 0644); err != nil {
+		t.Fatalf("write head-name: %v", err)
+	}
+
+	branch, err := ResolveCurrentBranch(tempDir)
+	if err != nil {
+		t.Fatalf("expected active branch during rebase, got error: %v", err)
+	}
+	if branch != "feature/checkout-v2" {
+		t.Errorf("expected 'feature/checkout-v2', got %q", branch)
+	}
+}

@@ -188,3 +188,36 @@ func TestScriptTemplateNohupProtection(t *testing.T) {
 	}
 }
 
+func TestInstallHooksRejectsNonShellShebang(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+
+	gitHooksDir := filepath.Join(tempDir, ".git", "hooks")
+	if err := os.MkdirAll(gitHooksDir, 0755); err != nil {
+		t.Fatalf("mkdir .git/hooks: %v", err)
+	}
+
+	pythonHook := filepath.Join(gitHooksDir, "post-checkout")
+	pythonContent := "#!/usr/bin/env python3\nprint('hello from python')\n"
+	if err := os.WriteFile(pythonHook, []byte(pythonContent), 0755); err != nil {
+		t.Fatalf("write python hook: %v", err)
+	}
+
+	err := InstallHooks(tempDir)
+	if err == nil {
+		t.Fatalf("expected error when installing hook over python script, got nil")
+	}
+	if !strings.Contains(err.Error(), "incompatible non-shell shebang") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+
+	// Ensure file was not modified
+	data, readErr := os.ReadFile(pythonHook)
+	if readErr != nil {
+		t.Fatalf("read python hook: %v", readErr)
+	}
+	if string(data) != pythonContent {
+		t.Fatalf("python hook file was modified: got %q, expected %q", string(data), pythonContent)
+	}
+}
+

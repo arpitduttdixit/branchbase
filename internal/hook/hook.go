@@ -102,6 +102,16 @@ func installSingleHook(hookPath, hookName string) error {
 		return nil
 	}
 
+	if existingContent != "" {
+		firstLine := strings.TrimSpace(strings.SplitN(existingContent, "\n", 2)[0])
+		if strings.HasPrefix(firstLine, "#!") {
+			lower := strings.ToLower(firstLine)
+			if !strings.Contains(lower, "sh") && !strings.Contains(lower, "bash") && !strings.Contains(lower, "dash") && !strings.Contains(lower, "zsh") && !strings.Contains(lower, "ksh") {
+				return fmt.Errorf("existing hook %s has incompatible non-shell shebang %q; cannot safely inject shell script", hookPath, firstLine)
+			}
+		}
+	}
+
 	snippet := ScriptTemplate(hookName)
 	var finalContent string
 	if existingContent == "" {
