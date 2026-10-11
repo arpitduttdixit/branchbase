@@ -51,11 +51,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Interactive Terminal UI (TUI) dashboard (`branchbase tui` / `branchbase dashboard`) with zero external dependencies, ANSI escape sequences, arrow/vim keyboard navigation, branch switching, and live database inspection (#74).
 - PostgreSQL wire protocol `ErrorResponse` (`'E'`) packet generator (`pgwire.BuildErrorResponse`) providing detailed client-side diagnostics (Severity, SQLSTATE, message) upon JIT provisioning or routing failures (#71).
 - Transparent Git worktree and submodule support in hook installer (`internal/hook/hook.go`) resolving pointer files (`gitdir: ...`) and `commondir` (#71).
-
-### Performance
-- Single-file checkout event filtering in `branchbase hook-trigger` (`flag == "0"` from Git `post-checkout`), skipping redundant database driver connections and queries when not switching branches (#71).
-
-### Added
 - Native Apple File System (APFS) `clonefile(2)` syscall in macOS SQLite driver (`internal/driver/sqlite/clone_darwin.go`) with chunked copy fallback (#66).
 - Graceful active connection draining with timeout and forced termination on proxy shutdown in `internal/proxy` (#49).
 - UNIX domain socket support for proxy listener and database backend targets (`/tmp/.s.PGSQL.5432`) (#50).
@@ -63,22 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Database metadata tracking and `ErrBranchNameCollision` guard in database drivers preventing cross-branch name collisions (#60).
 - End-to-End integration test suite in GitHub Actions running with PostgreSQL 16 service container (`//go:build integration`) (#51).
 - Complete Prisma ORM developer integration guide (`docs/guides/prisma.md`) (#21).
-
-### Fixed
-- Transparent forwarding of PostgreSQL `CancelRequest` (`1234.5678`) wire packets in proxy without startup rewriting or protocol corruption (#46).
-- Strict pre-validation of PostgreSQL 63-byte identifier limit in `PostgresDriver.CreateBranch()` preventing silent database truncation (#63).
-- Pinned official stable GitHub Actions in CI/CD pipeline (`actions/checkout@v4`, `actions/setup-go@v5`, `golangci/golangci-lint-action@v6`) (#71).
-
-
-### Fixed
-- PostgreSQL driver connection pool initialization with `lib/pq` and `database/sql`, supporting SQLSTATE `42P04` (`duplicate_database`) idempotent branching and hermetic `sqlmock` tests (#24).
-- Explicit `Close() error` resource teardown across database drivers and CLI proxy lifecycle (#24).
-- Thread-safe `Server.listener` access synchronized with a mutex across `Start()`, `acceptLoop()`, and `Stop()`, eliminating data races under `-race` (#39).
-- Idempotent and thread-safe `Server.Stop()` shutdown via `sync.Once`, preventing channel close panics on repeated calls (#35).
-- Accurate `.branchbase.yaml` configuration parsing using `yaml.v3`, preserving defaults for unspecified fields (#36).
-- Explicit `ErrPacketTooLarge` error returned when client startup packets exceed the 10KB limit (#37).
-
-### Added
 - Proxy Just-in-Time (JIT) branch database provisioning (`internal/proxy`) under double-checked locking with refcounted `keyedMutex` (#31).
 - Environment variable expansion (`${ENV_VAR}` and `$ENV_VAR`) in configuration files with `.branchbase.yml` extension support (#48).
 - Git branch discovery (`ResolveLocalBranches`) and merged branch resolution (`ResolveMergedBranches`) with packed-refs and fallback inspection (#48).
@@ -98,8 +77,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--json` output flag for `branchbase status` providing structured JSON output for scripts and devtools (#17).
 - Bidirectional socket cleanup and channel draining in proxy `handleConnection`, eliminating goroutine and file descriptor leaks on half-close (#18).
 - Defensive bounds checks and error reporting for inverted or corrupted hook markers in `UninstallHooks` (#15).
-- Nil-safe fallback in `runStatus` when `.branchbase.json` is missing or nil (#16).
-- CI matrix compatibility fix for macOS ARM64 runners requiring Go 1.23+ dyld `LC_UUID` (#20).
 - PostgreSQL wire protocol `StartupMessage` packet parser and dynamic rewriter (`internal/proxy/pgwire`).
 - Automated Git hook engine (`internal/hook`) installing `post-checkout` and `post-merge` hooks.
 - CLI subcommands for hook lifecycle management: `branchbase hooks [install|uninstall|status]`.
@@ -117,6 +94,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-OS GitHub Actions CI workflow (Ubuntu, macOS, Windows).
 - Pre-commit configuration and EditorConfig standardization.
 - BranchBase driver skill (`.agents/skills/branchbase-driver/SKILL.md`).
+
+### Performance
+- Single-file checkout event filtering in `branchbase hook-trigger` (`flag == "0"` from Git `post-checkout`), skipping redundant database driver connections and queries when not switching branches (#71).
+
+### Fixed
+- Transparent forwarding of PostgreSQL `CancelRequest` (`1234.5678`) wire packets in proxy without startup rewriting or protocol corruption (#46).
+- Strict pre-validation of PostgreSQL 63-byte identifier limit in `PostgresDriver.CreateBranch()` preventing silent database truncation (#63).
+- Pinned official stable GitHub Actions in CI/CD pipeline (`actions/checkout@v4`, `actions/setup-go@v5`, `golangci/golangci-lint-action@v6`) (#71).
+- PostgreSQL driver connection pool initialization with `lib/pq` and `database/sql`, supporting SQLSTATE `42P04` (`duplicate_database`) idempotent branching and hermetic `sqlmock` tests (#24).
+- Explicit `Close() error` resource teardown across database drivers and CLI proxy lifecycle (#24).
+- Thread-safe `Server.listener` access synchronized with a mutex across `Start()`, `acceptLoop()`, and `Stop()`, eliminating data races under `-race` (#39).
+- Idempotent and thread-safe `Server.Stop()` shutdown via `sync.Once`, preventing channel close panics on repeated calls (#35).
+- Accurate `.branchbase.yaml` configuration parsing using `yaml.v3`, preserving defaults for unspecified fields (#36).
+- Explicit `ErrPacketTooLarge` error returned when client startup packets exceed the 10KB limit (#37).
+- Nil-safe fallback in `runStatus` when `.branchbase.json` is missing or nil (#16).
+- CI matrix compatibility fix for macOS ARM64 runners requiring Go 1.23+ dyld `LC_UUID` (#20).
 
 ---
 

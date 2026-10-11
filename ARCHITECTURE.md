@@ -25,7 +25,7 @@ graph TD
     subgraph Database Layer [Docker / Native]
         DBDriver -->|CREATE DATABASE TEMPLATE| PG[(PostgreSQL)]
         DBDriver -->|Reflink / CoW Copy| SQLite[(SQLite)]
-        DBDriver -->|Volume / DB Clone| MySQL[(MySQL)]
+        DBDriver -->|Table-by-Table Replication| MySQL[(MySQL)]
         DBDriver -->|Aggregation Pipeline Clone| MongoDB[(MongoDB)]
     end
 ```
@@ -118,16 +118,21 @@ To ensure developers **never have to touch `.env`** or restart their dev servers
    - Strictly validates and propagates branch existence errors on both fast and slow paths, preventing accidental database overwrites.
    - Allocates dedicated 5-second timeout contexts once the lock is acquired, ensuring provisioning operations never time out prematurely under high lock contention.
 4. **Wire-Protocol Rewriting & Error Reporting:**
-   - Intercepts PostgreSQL `StartupMessage`, rewrites database parameter to branch database (`myapp_dev_feature_billing`), responds to SSL negotiation, and streams bidirectionally with zero overhead.
-   - **Fail-Closed Invariant:** If database rewriting fails (e.g. identifier exceeds 63 bytes or invalid characters), the connection is immediately aborted rather than forwarded to the default database.
-   - **Wire Error Diagnostic:** If JIT provisioning, backend connection, or database rewriting fails, the proxy builds and writes a standard PostgreSQL `ErrorResponse` (`'E'`) packet (with severity `FATAL`, SQLSTATE code, and descriptive error message) before closing the client socket, ensuring developers receive clear diagnostics in CLI tools (`psql`) and ORMs (`Prisma`, `dbt`).
-5. **TLS/SSL Client Negotiation:**
+   - **PostgreSQL (`pgwire`):** Intercepts `StartupMessage`, rewrites the database parameter to the branch database (`myapp_dev_feature_billing`), handles SSL negotiation, and streams bidirectionally with sub-millisecond overhead.
+     - *Fail-Closed Invariant:* If database rewriting fails (e.g. identifier exceeds 63 bytes or contains null bytes), the connection is aborted immediately rather than forwarded to the base database.
+     - *Wire Error Diagnostic:* If JIT provisioning, backend connection, or database rewriting fails, the proxy builds and writes a standard PostgreSQL `ErrorResponse` (`'E'`) packet (with severity `FATAL`, SQLSTATE code, and descriptive message) before closing the client socket.
+   - **MySQL / MariaDB (`mysqlwire`):** Performs inverted handshake interception. Intercepts backend `Protocol::HandshakeV10`, passes it to the client, parses client `HandshakeResponse41`, and rewrites the schema name to the branch database.
+     - *SSL Fail-Closed Handling:* In cleartext proxy mode, if the client requests SSL negotiation (`ClientSSL`), the proxy immediately replies with a MySQL error packet (code `2061`) and closes the connection rather than degrading silently.
+     - *Schema Rewrite Fail-Closed:* If schema rewrite fails, the proxy returns a MySQL error packet (code `1049` `ER_BAD_DB_ERROR`) and aborts the connection.
+5. **TLS/SSL Client Negotiation (PostgreSQL):**
    - Supports clients connecting with `sslmode=require` by generating self-signed ECDSA development certificates at startup.
    - Transparently upgrades client connections to TLS when the PostgreSQL `SSLRequest` packet is received.
 6. **UNIX Domain Socket Support:**
    - Both the listener and backend target can be configured as UNIX domain sockets (e.g., `/tmp/.s.PGSQL.5432`), eliminating TCP overhead for local connections.
 7. **Graceful Connection Draining:**
    - On `Stop()`, the proxy tracks all active connections (`activeConns map[net.Conn]struct{}`) and waits up to `drainTimeout` for in-flight queries to complete before force-closing remaining connections.
+8. **Proxy Protocol Scope:**
+   - The transparent TCP routing proxy operates on wire protocols: PostgreSQL (`5432`) and MySQL (`3306`). File-based engines (SQLite) and document stores (MongoDB) are managed via CLI commands and automated Git hooks rather than TCP proxying.
 
 
 ---

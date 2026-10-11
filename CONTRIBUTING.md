@@ -1,10 +1,6 @@
 # Contributing to BranchBase
 
-First off, thank you for considering contributing to **BranchBase**! Projects like this thrive because of developers like you who care about improving day-to-day developer experience.
-
-Whether you want to write code, design new database drivers, report bugs, improve documentation, or share feedback, your help is warmly welcomed.
-
----
+Guidelines, development workflow, and pull request standards for contributors to BranchBase.
 
 ## Getting Started for New Contributors
 
@@ -24,19 +20,19 @@ Here are some high-impact areas where we need collaboration:
    - PostgreSQL Driver (`CREATE DATABASE ... TEMPLATE`) — *Implemented.*
    - SQLite Driver (Reflink / APFS `clonefile` / Btrfs / XFS) — *Implemented.*
    - MySQL / MariaDB Driver (`CREATE TABLE ... LIKE` schema cloning) — *Implemented.*
-   - MongoDB Driver — *Open for contribution.*
+   - MongoDB Driver (Aggregation cloning & index replication) — *Implemented.*
    - CockroachDB / TiDB Driver — *Open for contribution.*
 2. **Transparent Proxy Engine:**
    - Wire-protocol parsing for PostgreSQL `StartupMessage` — *Implemented.*
    - TLS/SSL negotiation (`sslmode=require`) — *Implemented.*
    - UNIX domain socket support — *Implemented.*
    - Graceful connection draining — *Implemented.*
-   - Wire-protocol parsing for MySQL Handshake — *Open for contribution.*
+   - Wire-protocol parsing for MySQL Handshake — *Implemented.*
 3. **CLI & Developer Experience:**
    - Git hook installation & integration tests — *Implemented.*
    - Interactive TUI (Terminal UI) dashboard — *Implemented.*
    - Autocompletion scripts (bash, zsh, fish, powershell) — *Implemented.*
-   - `branchbase doctor` diagnostic command — *Open for contribution.*
+   - `branchbase doctor` diagnostic command — *Implemented.*
 4. **Documentation & Guides:**
    - Prisma ORM integration guide — *Implemented.*
    - Integration guides for: **Drizzle**, **Django**, **Ruby on Rails**, **Alembic/SQLAlchemy**, **TypeORM**.
@@ -46,7 +42,7 @@ Here are some high-impact areas where we need collaboration:
 ## Development Setup
 
 ### Prerequisites
-- **Go** (1.22+ or latest stable).
+- **Go** (1.26+ or latest stable).
 - **Docker & Docker Compose** (for running local test databases).
 - **Git** (2.30+).
 
@@ -119,5 +115,3 @@ type Driver interface {
 
 - **GitHub Discussions:** Use Discussions for architecture proposals, RFCs, and questions.
 - **Issues:** Use GitHub Issues for bug reports and tracked feature requests.
-
-Thank you for building the future of local-first database developer experience with us!

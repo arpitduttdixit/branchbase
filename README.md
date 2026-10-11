@@ -1,10 +1,10 @@
 # BranchBase
 
-> **Zero-config, Git-native local database branching for PostgreSQL, MySQL, SQLite, and MongoDB.**  
-> Stop dropping your local database every time you switch Git branches.
+> **Git-native local database branching and wire-protocol routing for local development.**  
+> Isolates schema changes and migrations per Git branch without re-seeding or editing `.env`.
 
 [![BranchBase CI](https://github.com/oscarbol09/branchbase/actions/workflows/ci.yml/badge.svg)](https://github.com/oscarbol09/branchbase/actions/workflows/ci.yml)
-[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Good First Issues](https://img.shields.io/github/issues/oscarbol09/branchbase/good%20first%20issue?color=7057ff&label=good%20first%20issues)](https://github.com/oscarbol09/branchbase/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
@@ -39,7 +39,7 @@ Every developer working with Docker, local PostgreSQL, MySQL, SQLite, or MongoDB
 
 ## The Solution: BranchBase
 
-**BranchBase** brings instant, zero-copy database branching directly to your **local machine and Docker containers**.
+BranchBase pairs automated Git branch transitions with database cloning mechanisms and a transparent wire-protocol TCP proxy, keeping your connection strings stable while routing queries to branch-specific databases.
 
 ```
                            +---------------------------+
@@ -53,24 +53,24 @@ Every developer working with Docker, local PostgreSQL, MySQL, SQLite, or MongoDB
                                          |
                     +--------------------+--------------------+
                     |                                         |
-          (Detects new branch)                      (Zero-Copy Snapshot)
+          (Detects new branch)                      (Branch Provisioning)
                     |                                         |
                     v                                         v
 +---------------------------------------+   +------------------------------------+
-|       BranchBase Proxy (Port 5432)    |   |     Local Database (PostgreSQL)    |
+|   BranchBase Proxy (Postgres / MySQL) |   |          Local Database            |
 +---------------------------------------+   +------------------------------------+
-| - App connection string NEVER changes |   | - `db_project_main` (frozen)       |
+| - App connection string stays stable  |   | - `db_project_main` (frozen)       |
 | - Automatically routes queries to the |   | - `db_project_branch_b` (active)   |
-|   active Git branch database!         |   |   (Created instantly via TEMPLATE) |
+|   active Git branch database!         |   |   (Created via engine driver)      |
 +---------------------------------------+   +------------------------------------+
 ```
 
 ### Key Highlights
-- **Instant Branching:** Creates a fresh, isolated branch database in milliseconds using PostgreSQL `CREATE DATABASE ... TEMPLATE` or filesystem copy-on-write (reflink/APFS/Btrfs for SQLite).
-- **Transparent Connection Proxy:** Your app's `DATABASE_URL=postgres://user:pass@localhost:5432/myapp` **never changes**. The local proxy automatically inspects which Git branch is active in your working directory and routes traffic to that branch's database.
-- **Automated Git Hook:** Hooks into `post-checkout` and `post-merge`. You simply use standard `git checkout` or `git switch`.
-- **Automatic Cleanup (`prune`):** When you delete or merge a Git branch, `branchbase` safely tears down the associated ephemeral database.
-- **100% Local & Offline:** No cloud telemetry, no subscription fees, no internet needed.
+- **Engine-Native Branching:** Creates fresh, isolated branch databases using PostgreSQL `CREATE DATABASE ... TEMPLATE`, MySQL schema/data cloning, SQLite filesystem Copy-on-Write (`clonefile` / `FICLONE`), or MongoDB aggregation cloning.
+- **Transparent Wire Proxy:** Your application connects to a stable local port (`5432` for PostgreSQL or `3306` for MySQL). The proxy inspects the active Git branch from `.git/HEAD` and routes connections to that branch's database without touching `.env`.
+- **Automated Git Lifecycle:** Hooks into `post-checkout` and `post-merge` via lightweight POSIX scripts that run asynchronously.
+- **Automatic Reconcile & Cleanup (`prune`):** Detects merged or deleted branches and safely removes orphaned databases.
+- **100% Local & Offline:** Operates strictly on localhost with zero cloud telemetry or proprietary subscriptions.
 
 ---
 
@@ -87,6 +87,10 @@ Every developer working with Docker, local PostgreSQL, MySQL, SQLite, or MongoDB
 | `branchbase hooks install` | Install automated `post-checkout` and `post-merge` hooks into `.git/hooks/` |
 | `branchbase hooks uninstall` | Remove BranchBase hooks from `.git/hooks/` |
 | `branchbase hooks status` | Inspect Git hooks installation and activity status |
+| `branchbase doctor` | Diagnose system prerequisites, Docker health, dependencies, and port availability |
+| `branchbase risk analyze <file> [--json] [--offline] [--github]` | Parse and evaluate migration file risk |
+| `branchbase risk check [--branch <b>] [--policy <p>] [--force] [--offline] [--json]` | Evaluate pending branch migrations against policy |
+| `branchbase completion <bash|zsh|fish|powershell>` | Generate tab-completion scripts |
 | `branchbase prune [--dry-run] [--force]` | Reconcile merged/orphaned branches and safely delete corresponding databases |
 | `branchbase version` | Print the current BranchBase version, author, and repository URL |
 
@@ -102,24 +106,27 @@ branchbase/
 ├── internal/
 │   ├── compose/                  # Docker Compose auto-detection & environment parser
 │   ├── config/                   # Configuration loader (.branchbase.json / .yaml)
+│   ├── doctor/                   # System health, port & dependency diagnostics
 │   ├── driver/                   # Database engine interfaces & registry
 │   │   ├── driver.go             # Core Driver interface contract
 │   │   ├── mysql/                # MySQL & MariaDB engine (table cloning & metadata)
 │   │   ├── postgres/             # PostgreSQL engine (TEMPLATE cloning)
-│   │   ├── mongodb/              # MongoDB engine ( aggregation cloning)
+│   │   ├── mongodb/              # MongoDB engine (aggregation cloning)
 │   │   └── sqlite/               # SQLite engine (CoW / Reflink snapshots)
-│   ├── tui/                      # Interactive Terminal UI (ANSI dashboard)
 │   ├── git/                      # Git HEAD inspector and branch sanitization
 │   │   ├── resolver.go           # Non-subshell .git/HEAD resolution
 │   │   └── resolver_test.go      # Table-driven unit test suite
 │   ├── hook/                     # Automated Git hook manager (post-checkout/merge)
 │   │   ├── hook.go               # Non-intrusive hook installer
 │   │   └── hook_test.go          # Hook lifecycle test suite
-│   └── proxy/                    # Transparent TCP proxy & wire routing
-│       ├── pgwire/               # PostgreSQL wire-protocol StartupMessage rewriter
-│       │   ├── pgwire.go         # Packet parser & database replacer
-│       │   └── pgwire_test.go    # Protocol unit test suite
-│       └── proxy.go              # Zero-overhead bidirectional TCP forwarder
+│   ├── proxy/                    # Transparent TCP proxy & wire routing
+│   │   ├── mysqlwire/            # MySQL wire-protocol handshake parser & replacer
+│   │   ├── pgwire/               # PostgreSQL wire-protocol StartupMessage rewriter
+│   │   │   ├── pgwire.go         # Packet parser & database replacer
+│   │   │   └── pgwire_test.go    # Protocol unit test suite
+│   │   └── proxy.go              # Zero-overhead bidirectional TCP forwarder
+│   ├── risk/                     # Migration Risk Gate engine (JEV + Heuristic classifier)
+│   └── tui/                      # Interactive Terminal UI (ANSI dashboard)
 ├── .agents/                      # Custom Agent skills & development workflows
 ├── .github/                      # CI workflows, issue templates, dependabot
 ├── ARCHITECTURE.md               # Detailed system design & sequence diagrams
@@ -129,7 +136,7 @@ branchbase/
 ├── CODE_OF_CONDUCT.md            # Contributor Covenant v2.1
 ├── CHANGELOG.md                  # Keep a Changelog version history
 ├── branchbase.example.yaml       # Annotated configuration specification
-└── go.mod                        # Go 1.22+ module definition
+└── go.mod                        # Go 1.26+ module definition
 ```
 
 ---
@@ -146,6 +153,17 @@ branchbase/
    * **Docker Compose:** Automatically inspects `docker-compose.yml` to configure database ports and credentials without manual input.
 4. **Transparent Routing:** When your backend app queries `localhost:5432`, the BranchBase proxy intercepts the connection, resolves the active branch database, and forwards traffic directly with sub-millisecond overhead.
 5. **Lifecycle Pruning:** Once a PR is merged into `main`, running `branchbase prune` removes the ephemeral database, freeing disk space.
+
+---
+
+## Known Limitations & Trade-offs
+
+- **Proxy Protocol Scope:** The transparent TCP proxy routes PostgreSQL (`5432`) and MySQL (`3306`) wire protocols. File-based databases like SQLite and document engines like MongoDB are managed via CLI commands and Git hooks, but are not intercepted by the TCP proxy.
+- **MySQL Wire SSL:** When the transparent MySQL proxy runs in cleartext mode, incoming client connections requesting TLS (`ClientSSL`) fail closed with MySQL error code `2061`. Applications using MySQL through the proxy must configure SSL as disabled or optional in local development.
+- **PostgreSQL Connection Locking:** PostgreSQL's `CREATE DATABASE ... TEMPLATE` fails with SQLSTATE `55006` if active connections remain open on the template. BranchBase terminates idle connections via `pg_terminate_backend()` prior to cloning; long-running active transactions on the source database can still cause cloning to wait or fail.
+- **MySQL Data Cloning Performance:** MySQL lacks native copy-on-write database cloning. BranchBase replicates schemas and data table by table (`CREATE TABLE ... LIKE`, `INSERT INTO ... SELECT`). Large seed datasets (e.g. hundreds of megabytes or millions of rows) will take seconds to clone rather than milliseconds.
+- **SQLite Filesystem Reflink:** Fast Copy-on-Write snapshots depend on filesystem support (`clonefile` on APFS, `FICLONE` on Btrfs/XFS). On ext4 without reflink, NTFS, or FAT32, BranchBase falls back to chunked file copying. Additionally, active WAL sidecars (`-wal`, `-shm`) require checkpointing (`PRAGMA wal_checkpoint(TRUNCATE)`) before safe snapshots.
+- **MongoDB Collection Cloning:** MongoDB cloning uses `$out` aggregation pipelines across collections and reconstructs indexes. Capped collections and time-series collections require standard collection semantics.
 
 ---
 

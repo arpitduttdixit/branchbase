@@ -8,7 +8,7 @@ This guide walks you through setting up your local machine to build, test, and c
 
 Make sure you have the following installed on your workstation:
 
-- **Go (1.22+):** [Download and install Go](https://go.dev/dl/). Verify with `go version`.
+- **Go (1.26+):** [Download and install Go](https://go.dev/dl/). Verify with `go version`.
 - **Git (2.30+):** Verify with `git --version`.
 - **Docker & Docker Compose:** Required to run local test database containers.
 - **pre-commit (Optional but recommended):** `pip install pre-commit` or `brew install pre-commit`.
@@ -36,14 +36,10 @@ go build -v -o bin/branchbase ./cmd/branchbase
 
 ## 3. Running Test Database Containers
 
-To test database branching against real PostgreSQL, MySQL, and MongoDB instances locally:
+To test database branching against real PostgreSQL, MySQL, and MongoDB instances locally, launch standalone test containers matching the ports used in CI:
 
 ```bash
-# Start a local PostgreSQL 16 test container
-# Start local PostgreSQL, MySQL, and MongoDB test containers
-docker compose up -d
-
-# Or start a local PostgreSQL 16 test container manually
+# PostgreSQL 16 (backend port 5433)
 docker run --name branchbase-postgres-test \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=postgres \
@@ -51,8 +47,22 @@ docker run --name branchbase-postgres-test \
   -p 5433:5432 \
   -d postgres:16-alpine
 
-# Verify connectivity
-docker exec -it branchbase-postgres-test pg_isready
+# MySQL 8.0 (backend port 3307)
+docker run --name branchbase-mysql-test \
+  -e MYSQL_ROOT_PASSWORD=root \
+  -e MYSQL_DATABASE=myapp_dev \
+  -p 3307:3306 \
+  -d mysql:8.0
+
+# MongoDB 7 (backend port 27018)
+docker run --name branchbase-mongo-test \
+  -e MONGO_INITDB_ROOT_USERNAME=root \
+  -e MONGO_INITDB_ROOT_PASSWORD=password \
+  -p 27018:27017 \
+  -d mongo:7
+
+# Verify PostgreSQL connectivity
+docker exec -it branchbase-postgres-test pg_isready -U postgres
 ```
 
 ---
